@@ -27,7 +27,7 @@ It provides seamless support for OLED displays, rotary encoders, buttons, and LE
 ssh volumio@volumio.local
 ```
 
-**Step 2.** Clone this repository:
+**Step 2.** Clone (clone = download) this repository:
 
 ```bash
 git clone https://github.com/theshepherdmatt/Quadify-Plugin.git
