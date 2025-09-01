@@ -1,0 +1,88 @@
+# Quadify Plugin
+
+The **Quadify Plugin** integrates advanced audio display and control hardware with Volumio.
+It provides seamless support for OLED displays, rotary encoders, buttons, and LEDs on Raspberry Pi systems running Volumio.
+
+## Features
+
+* OLED display integration (SSD1322 and other types supported via `luma.oled`)
+* Rotary encoder support (volume and navigation)
+* Button and LED input/output
+* CAVA visualiser (VU meter mode)
+* Modular hardware configuration via `config.yaml`
+
+## Requirements
+
+* A Raspberry Pi running **Volumio 3 or later**
+* Active internet connection during installation (to fetch dependencies)
+* Basic hardware setup (OLED, encoder, buttons, LEDs connected as per `config.yaml`)
+
+---
+
+## Installation
+
+**Step 1.** SSH into your Volumio device:
+
+```bash
+ssh volumio@volumio.local
+```
+
+**Step 2.** Clone this repository:
+
+```bash
+git clone https://github.com/theshepherdmatt/Quadify-Plugin.git
+cd Quadify-Plugin
+```
+
+**Step 3.** Install the plugin with Volumio:
+
+```bash
+volumio plugin install
+```
+
+**Step 4.** Enable the plugin in the Volumio Web UI under:
+`Plugins → Installed Plugins → Quadify Plugin → Enable`
+
+---
+
+## Managing the Plugin
+
+**Restart the plugin service:**
+
+```bash
+sudo systemctl restart quadify
+```
+
+**Follow plugin logs:**
+
+```bash
+journalctl -u quadify -f
+```
+
+**Check CAVA (visualiser) status:**
+
+```bash
+sudo systemctl status cava
+```
+
+---
+
+## Debugging
+
+If Quadify Plugin isn’t working as expected:
+
+1. Check Volumio logs:
+
+   ```bash
+   journalctl -u volumio -f
+   ```
+2. Run the Python backend directly for errors:
+
+   ```bash
+   cd /data/plugins/system_hardware/quadify/quadifyapp/src
+   python3 main.py
+   ```
+
+If issues persist, please [open an Issue](https://github.com/theshepherdmatt/Quadify-Plugin/issues) with your setup details and error messages.
+
+---
