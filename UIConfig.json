@@ -1,0 +1,94 @@
+{
+  "page": {
+    "label": "Quadify",
+    "icon": "fa-cube"
+  },
+  "sections": [
+    {
+      "id": "display_controls",
+      "label": "Display",
+      "element": "section",
+      "icon": "fa-television",
+      "content": [
+        {
+          "id": "display_mode",
+          "element": "select",
+          "label": "Playback screen",
+          "value": "modern",
+          "options": [
+            { "label": "Original", "value": "original" },
+            { "label": "Modern", "value": "modern" },
+            { "label": "Minimal", "value": "minimal" },
+            { "label": "VU Screen", "value": "vuscreen" },
+            { "label": "Digital VU", "value": "digitalvuscreen" }
+          ]
+        },
+        {
+          "id": "enableCava",
+          "element": "switch",
+          "label": "Enable CAVA visualizer",
+          "value": false
+        },
+        {
+          "id": "enableButtonsLED",
+          "element": "switch",
+          "label": "Enable Buttons / LEDs service",
+          "value": false
+        }
+      ],
+      "saveButton": {
+        "label": "Save",
+        "data": [
+          "display_mode",
+          "enableCava",
+          "enableButtonsLED"
+        ]
+      }
+    },
+    {
+      "id": "mcp23017_config",
+      "label": "Buttons/LEDs (MCP23017)",
+      "element": "section",
+      "icon": "fa-microchip",
+      "content": [
+        {
+          "id": "mcp23017_address",
+          "element": "input",
+          "type": "text",
+          "label": "I²C address (e.g. 0x20)",
+          "value": "0x20"
+        },
+        {
+          "element": "button",
+          "label": "Auto-detect address",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "system_hardware/quadify",
+            "method": "autoDetectMCP"
+          }
+        }
+      ],
+      "saveButton": {
+        "label": "Save",
+        "data": ["mcp23017_address"]
+      }
+    },
+    {
+      "id": "actions",
+      "label": "Actions",
+      "element": "section",
+      "icon": "fa-cogs",
+      "content": [
+        {
+          "element": "button",
+          "label": "Restart Quadify",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "system_hardware/quadify",
+            "method": "restartQuadify"
+          }
+        }
+      ]
+    }
+  ]
+}

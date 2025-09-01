@@ -1,0 +1,41 @@
+{
+  "name": "quadify",
+  "version": "1.0.0",
+  "description": "Python-powered Volumio plugin: Quadify integration",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"No test specified\" && exit 0"
+  },
+  "author": "Matt Shepherd",
+  "license": "MIT",
+  "repository": "https://github.com/theshepherdmatt/Quadify-Plugin",
+  "volumio_info": {
+    "prettyName": "Quadify Plugin",
+    "icon": "fa-microchip",
+    "plugin_type": "system_hardware",
+    "architectures": [
+      "armhf",
+      "armv7l",
+      "arm64",
+      "x86",
+      "i386"
+    ],
+    "os": [
+      "buster",
+      "bullseye",
+      "bookworm"
+    ],
+    "details": "Integration for Quadify via Python backend.",
+    "changelog": "Initial release with Python integration."
+  },
+  "engines": {
+    "node": ">=14",
+    "volumio": ">=3"
+  },
+  "dependencies": {
+    "fs-extra": "^11.2.0",
+    "kew": "^0.7.0",
+    "v-conf": "^1.4.0",
+    "js-yaml": "^4.1.0"
+  }
+}
