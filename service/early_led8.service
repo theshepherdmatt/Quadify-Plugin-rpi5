@@ -1,0 +1,14 @@
+[Unit]
+Description=Early LED 8 Indicator
+DefaultDependencies=no
+After=local-fs.target
+Before=quadify.service
+
+[Service]
+Type=oneshot
+User=volumio
+ExecStart=/usr/bin/python3 /data/plugins/system_hardware/quadify/quadifyapp/scripts/early_led8.py
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

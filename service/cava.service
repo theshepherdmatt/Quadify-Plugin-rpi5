@@ -1,0 +1,13 @@
+[Unit]
+Description=CAVA - Console-based Audio Visualizer (Quadify Plugin)
+After=sound.target
+
+[Service]
+ExecStart=/data/plugins/system_hardware/quadify/cava/bin/cava -p /data/plugins/system_hardware/quadify/cava/config/default_config
+Restart=always
+RestartSec=3
+User=volumio
+Group=volumio
+
+[Install]
+WantedBy=multi-user.target

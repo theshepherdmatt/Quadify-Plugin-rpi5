@@ -1,0 +1,17 @@
+[Unit]
+Description=Quadify IR Listener
+After=lircd.service
+Wants=lircd.service
+
+[Service]
+Type=simple
+# If you want to wait for lircd’s socket, uncomment the next line:
+# ExecStartPre=/bin/sh -lc 'for i in $(seq 1 50); do [ -S /var/run/lirc/lircd ] && exit 0; sleep 0.2; done; echo "lircd socket not ready"; exit 1'
+ExecStart=/usr/bin/python3 /data/plugins/system_hardware/quadify/quadifyapp/src/hardware/ir_listener.py
+Restart=always
+RestartSec=1
+TimeoutStopSec=2
+
+[Install]
+WantedBy=multi-user.target
+

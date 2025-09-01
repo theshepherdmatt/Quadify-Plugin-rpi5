@@ -1,0 +1,12 @@
+{
+  "display_mode": "digitalvuscreen",
+  "clock_font_key": "clock_sans",
+  "show_seconds": false,
+  "show_date": false,
+  "screensaver_enabled": true,
+  "screensaver_type": "geo",
+  "screensaver_timeout": 3600,
+  "oled_brightness": 255,
+  "cava_enabled": true,
+  "modern_spectrum_mode": "dots"
+}

@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.tgz
+*.zip
+*.tar.gz

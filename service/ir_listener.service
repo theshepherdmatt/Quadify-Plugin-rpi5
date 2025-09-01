@@ -1,0 +1,14 @@
+[Unit]
+Description=Quadify IR Listener
+After=lircd.socket
+
+[Service]
+Type=simple
+User=volumio
+Group=volumio
+ExecStart=/usr/bin/python3 /data/plugins/system_hardware/quadify/quadifyapp/src/hardware/ir_listener.py
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

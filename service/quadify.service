@@ -1,0 +1,16 @@
+[Unit]
+Description=Main Quadify Service
+After=network.target
+
+[Service]
+Type=simple
+User=volumio
+WorkingDirectory=/data/plugins/system_hardware/quadify/quadifyapp
+ExecStart=/usr/bin/python3 /data/plugins/system_hardware/quadify/quadifyapp/src/main.py
+ExecStop=/usr/bin/python3 /data/plugins/system_hardware/quadify/quadifyapp/service/reset_oled_gpio.py
+Restart=on-failure
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target
+
