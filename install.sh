@@ -55,26 +55,41 @@ install_cava_from_fork() {
 }
 
 configure_mpd_fifo() {
-  log "Configuring MPD FIFO..."
+  log "Configuring MPD FIFO…"
+
   MPD_TMPL="/volumio/app/plugins/music_service/mpd/mpd.conf.tmpl"
-  FIFO_BLOCK='
-audio_output {
-    type            "fifo"
-    name            "my_fifo"
-    path            "/tmp/cava.fifo"
-    format          "44100:16:2"
-}'
-  if [ -f "$MPD_TMPL" ]; then
-    if grep -q "/tmp/cava.fifo" "$MPD_TMPL"; then
-      log "FIFO already present in MPD template"
-    else
-      # shellcheck disable=SC2016
-      run sh -c "printf '%s\n' \"$FIFO_BLOCK\" >> \"$MPD_TMPL\""
-      log "Added FIFO block to MPD template"
-    fi
-    run systemctl restart mpd
-  else
+  START="# --- QUADIFY_CAVA_FIFO_START ---"
+  END="# --- QUADIFY_CAVA_FIFO_END ---"
+
+  if [ ! -f "$MPD_TMPL" ]; then
     warn "MPD template not found: $MPD_TMPL"
+    return 0
+  fi
+
+  # Remove any previous marked block (prevents duplicates / corruption)
+  sudo sed -i "/$START/,/$END/d" "$MPD_TMPL"
+
+  # Append a clean, unquoted block (matches Volumio style)
+  sudo tee -a "$MPD_TMPL" >/dev/null <<'EOF'
+
+# --- QUADIFY_CAVA_FIFO_START ---
+audio_output {
+    type            fifo
+    name            my_fifo
+    path            /tmp/cava.fifo
+    format          44100:16:2
+}
+# --- QUADIFY_CAVA_FIFO_END ---
+EOF
+
+  # Let Volumio regenerate /etc/mpd.conf from the template
+  run systemctl restart volumio
+
+  # Quick sanity check (best-effort)
+  if grep -q "/tmp/cava.fifo" /etc/mpd.conf 2>/dev/null; then
+    log "Verified: cava FIFO present in /etc/mpd.conf"
+  else
+    warn "FIFO not visible yet; Volumio may regenerate shortly after boot."
   fi
 }
 
@@ -96,7 +111,6 @@ write_unit() {
   case "$EXEC_CMD" in
     /*) EXEC_LINE="ExecStart=${EXEC_CMD}" ;;
     *)
-      # If it starts with "./", expand to absolute; else run via env
       case "$EXEC_CMD" in
         ./*) EXEC_LINE="ExecStart=${PLUGIN_DIR}/${EXEC_CMD#./}" ;;
         *)   EXEC_LINE="ExecStart=/usr/bin/env ${EXEC_CMD}" ;;
@@ -104,7 +118,6 @@ write_unit() {
     ;;
   esac
 
-  # Create unit
   umask 022
   {
     echo "[Unit]"
@@ -188,10 +201,13 @@ run apt-get install -y python3 python3-pip python3-venv \
 log "Cleaning up Python packaging conflicts..."
 run pip3 uninstall -y importlib-metadata setuptools python-socketio socketio socketIO-client >/dev/null 2>&1 || true
 
-log "Upgrading pip and setuptools..."
-run python3 -m pip install --upgrade pip setuptools importlib-metadata
+log "Upgrading pip and setuptools (best effort)..."
+run python3 -m pip install --no-cache-dir --upgrade pip setuptools importlib-metadata
 
-log "Installing Python deps from requirements.txt..."
+log "Installing core Python runtime libs (apt) needed by CairoSVG..."
+run apt-get install -y libcairo2 libgdk-pixbuf-2.0-0 libpango-1.0-0 python3-cairo || true
+
+log "Installing Python deps from requirements.txt (best effort, with CairoSVG fallbacks)..."
 REQ_PATH=""
 if [ -f "./quadifyapp/requirements.txt" ]; then
   REQ_PATH="./quadifyapp/requirements.txt"
@@ -199,7 +215,17 @@ elif [ -f "./requirements.txt" ]; then
   REQ_PATH="./requirements.txt"
 fi
 if [ -n "$REQ_PATH" ]; then
-  run python3 -m pip install --upgrade --ignore-installed -r "$REQ_PATH"
+  run python3 -m pip install --no-cache-dir --upgrade --ignore-installed -r "$REQ_PATH"
+  run python3 - <<'PY'
+try:
+    import cairosvg
+    print("CairoSVG OK", getattr(cairosvg, "__version__", "?"))
+except Exception:
+    import subprocess, sys
+    print("CairoSVG missing, attempting explicit install...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-cache-dir",
+                           "cairosvg", "cssselect2", "tinycss2", "defusedxml", "cairocffi"])
+PY
 else
   warn "requirements.txt missing, skipping Python deps"
 fi
@@ -300,3 +326,4 @@ PY
 
 log "Install complete."
 exit 0
+
