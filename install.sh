@@ -137,7 +137,7 @@ run apt-get update
 run apt-get install -y \
   python3 python3-pip python3-venv \
   i2c-tools python3-smbus \
-  lirc lsof \
+  lsof \
   libjpeg-dev zlib1g-dev libfreetype6-dev \
   libgirepository1.0-dev libcairo2-dev libffi-dev build-essential \
   libxml2-dev libxslt1-dev libssl-dev \
@@ -184,31 +184,22 @@ else
 fi
 
 # -----------------------------
-# 4) Enable I²C/SPI + IR
+# 4) Enable I²C/SPI + IR overlay (no LIRC install)
 # -----------------------------
 log "Enabling I2C/SPI & IR overlays…"
 CONFIG_FILE="/boot/userconfig.txt"
 run touch "$CONFIG_FILE"
+
+# Keep these if your hardware needs them
 grep -qxF 'dtparam=spi=on' "$CONFIG_FILE"  || echo 'dtparam=spi=on'  | sudo tee -a "$CONFIG_FILE" >/dev/null
 grep -qxF 'dtparam=i2c_arm=on' "$CONFIG_FILE" || echo 'dtparam=i2c_arm=on' | sudo tee -a "$CONFIG_FILE" >/dev/null
+
+# This is the important one for the Volumio IR plugin (gpio 27)
 grep -qxF 'dtoverlay=gpio-ir,gpio_pin=27' "$CONFIG_FILE" || echo 'dtoverlay=gpio-ir,gpio_pin=27' | sudo tee -a "$CONFIG_FILE" >/dev/null
+
 run modprobe i2c-dev || true
 run modprobe spi-bcm2835 || true
 
-log "Configuring LIRC (/etc/lirc/lirc_options.conf)…"
-LIRC_OPTIONS="/etc/lirc/lirc_options.conf"
-if [ -f "$LIRC_OPTIONS" ]; then
-  run sed -i 's|^driver\s*=.*|driver = default|' "$LIRC_OPTIONS"
-  run sed -i 's|^device\s*=.*|device = /dev/lirc0|' "$LIRC_OPTIONS"
-else
-  cat <<EOF | sudo tee "$LIRC_OPTIONS" >/dev/null
-[lircd]
-nodaemon = False
-driver = default
-device = /dev/lirc0
-EOF
-fi
-run systemctl restart lircd || true
 
 # -----------------------------
 # 5) systemd services
@@ -222,22 +213,22 @@ install_unit_from_template_or_simple \
   "quadifyapp" \
   "/usr/bin/python3 $PLUGIN_DIR/quadifyapp/src/main.py"
 
-# ir_listener.service (if script exists)
+# quadify-ir-listener.service (if script exists)
 if [ -f "$PLUGIN_DIR/quadifyapp/src/hardware/ir_listener.py" ]; then
   install_unit_from_template_or_simple \
-    "ir_listener.service" \
-    "IR Listener Service for Quadify" \
+    "quadify-ir-listener.service" \
+    "Quadify IR Listener" \
     "quadifyapp/src/hardware" \
     "/usr/bin/python3 $PLUGIN_DIR/quadifyapp/src/hardware/ir_listener.py"
 fi
 
 # early_led8.service (if script exists)
-if [ -f "$PLUGIN_DIR/quadifyapp/src/hardware/early_led8.py" ]; then
+if [ -f "$PLUGIN_DIR/quadifyapp/scripts/early_led8.py" ]; then
   install_unit_from_template_or_simple \
     "early_led8.service" \
     "Early LED8 Buttons/LED Service for Quadify" \
-    "quadifyapp/src/hardware" \
-    "/usr/bin/python3 $PLUGIN_DIR/quadifyapp/src/hardware/early_led8.py"
+    "quadifyapp/scripts" \
+    "/usr/bin/python3 $PLUGIN_DIR/quadifyapp/scripts/early_led8.py"
 fi
 
 # cava.service — install unconditionally now (points to local-build path)
@@ -249,7 +240,7 @@ install_unit_from_template_or_simple \
 
 run systemctl daemon-reload
 run systemctl enable --now quadify.service || true
-[ -f /etc/systemd/system/ir_listener.service ] && run systemctl enable ir_listener.service || true
+[ -f /etc/systemd/system/quadify-ir-listener.service ] && run systemctl enable --now quadify-ir-listener.service || true
 [ -f /etc/systemd/system/early_led8.service ] && run systemctl enable early_led8.service || true
 
 # -----------------------------

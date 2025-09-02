@@ -51,7 +51,7 @@ def process_key(key, current_mode):
         elif current_mode == "clock":
             send_command("menu")
         else:
-            send_command("repeat")
+            pass
 
     elif key == "KEY_LEFT":
         if current_mode in ["original", "minimal", "modern", "webradio"]:
