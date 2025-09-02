@@ -95,7 +95,7 @@ function buildPreferenceFromVconf(conf) {
 
   return {
     display: {
-      spectrum: !!get('enableSpectrum', get('enableCava', false)), // back-compat with enableCava
+      spectrum: !!get('enableSpectrum', get('enableCava', false)), // back-compat
       screen: get('display_screen', get('display_mode', 'vu')),
       rotate: parseInt(get('display_rotate', 0), 10) || 0
     },
@@ -327,6 +327,11 @@ ControllerQuadify.prototype.onVolumioStart = function () {
   return defer.promise;
 };
 
+// ---- no-op sync (avoid "is not a function")
+ControllerQuadify.prototype.syncPreferenceToQuadify = function () {
+  return libQ.resolve();
+};
+
 // ----------- UI Config -----------
 ControllerQuadify.prototype.getUIConfig = function () {
   const defer = libQ.defer();
@@ -382,7 +387,6 @@ ControllerQuadify.prototype.getUIConfig = function () {
     .then(uiconf => populate(uiconf))
     .then(uiconf => defer.resolve(uiconf))
     .fail(async (err) => {
-      // Safe fallback if i18n files are missing
       this.logger.warn('[Quadify] i18nJson failed, falling back to raw UIConfig.json: ' + err);
       try {
         const raw = await fs.readJson(uiConfig);
@@ -464,7 +468,6 @@ ControllerQuadify.prototype.setUIConfig = function (data) {
   return loadRawPreferenceJSON()
     .then(raw => {
       const canonical = buildCanonicalFromAny(raw, hwCfg);
-      // update canonical from current v-conf snapshot
       const desired = buildPreferenceFromVconf(this.config);
       const mergedPref = shallowMerge(raw, shallowMerge(canonical, desired));
       return saveCanonicalPreference(mergedPref).then(() => mergedPref);
@@ -473,7 +476,7 @@ ControllerQuadify.prototype.setUIConfig = function (data) {
       this.commandRouter.pushToastMessage('success', 'Quadify', 'Configuration saved');
       return {};
     })
-    .catch(err => {
+    .fail(err => {
       this.commandRouter.pushToastMessage('error', 'Quadify', 'Saved, but preference sync failed');
       this.logger.error('[Quadify] preference sync failed: ' + err.message);
       return {};
@@ -498,7 +501,7 @@ function pExec(cmd, logger) {
 ControllerQuadify.prototype.controlService = function (service, enable) {
   const logger = this.logger;
   const sudo = '/usr/bin/sudo';
-  const systemctl = '/bin/systemctl'; // absolute path is safer on Volumio
+  const systemctl = '/bin/systemctl';
   const unit = `${service}.service`;
 
   // Wrap pExec calls so verify never explodes even if a command fails
@@ -533,7 +536,7 @@ ControllerQuadify.prototype.controlService = function (service, enable) {
     `${sudo} ${systemctl} disable ${unit}`
   ];
 
-  // IMPORTANT: kew uses .fail, not .catch
+  // kew uses .fail
   const runSeq = (seq) =>
     seq.reduce(
       (p, cmd) => p.then(() => pExec(cmd, logger).fail(() => libQ.resolve())),
@@ -585,7 +588,6 @@ ControllerQuadify.prototype.updateMcpConfig = function (data) {
 
   this.commandRouter.pushToastMessage('success', 'Quadify', `MCP23017 address saved: ${addr}`);
 
-  // keep preference.json aligned as well
   const hwCfg = this.loadConfigYaml();
   return loadRawPreferenceJSON()
     .then(raw => {
@@ -595,7 +597,7 @@ ControllerQuadify.prototype.updateMcpConfig = function (data) {
       return saveCanonicalPreference(merged);
     })
     .then(() => ({}))
-    .catch(e => { this.logger.warn('[Quadify] pref sync after updateMcpConfig: ' + e.message); return {}; });
+    .fail(e => { this.logger.warn('[Quadify] pref sync after updateMcpConfig: ' + e.message); return {}; });
 };
 
 ControllerQuadify.prototype.autoDetectMCP = function () {
@@ -630,7 +632,6 @@ ControllerQuadify.prototype.autoDetectMCP = function () {
     this.config.set('mcp23017_address', foundAddr || '');
     this.config.save();
 
-    // update preference with detected address
     const hwCfg = this.loadConfigYaml();
     loadRawPreferenceJSON()
       .then(raw => {
@@ -639,7 +640,7 @@ ControllerQuadify.prototype.autoDetectMCP = function () {
         const merged = shallowMerge(raw, canonical);
         return saveCanonicalPreference(merged);
       })
-      .catch(e => this.logger.warn('[Quadify] pref sync after autoDetect: ' + e.message));
+      .fail(e => this.logger.warn('[Quadify] pref sync after autoDetect: ' + e.message));
 
     if (!foundAddr) {
       this.commandRouter.pushToastMessage('error', 'Quadify', 'No MCP23017 board detected');
@@ -684,9 +685,15 @@ ControllerQuadify.prototype.updateRotaryConfig = function () {
   return libQ.resolve();
 };
 
+// Optional IR UI helper (avoid "No method" if clicked)
+ControllerQuadify.prototype.refreshIRRemotes = function () {
+  this.commandRouter.pushToastMessage('info', 'Quadify', 'Remote list refresh not implemented');
+  return libQ.resolve({});
+};
+
 // --------- Section SAVE handlers --------
 ControllerQuadify.prototype.saveDisplay_settings = function (data) {
-  const self = this; // lock context
+  const self = this;
   const flat = getFlatConfig(data || {});
   const cfg = self.loadConfigYaml();
 
@@ -701,16 +708,20 @@ ControllerQuadify.prototype.saveDisplay_settings = function (data) {
     .then(raw => {
       const pref = buildCanonicalFromAny(raw, hwCfg);
 
-      // Spectrum: prefer enableSpectrum; fall back to legacy enableCava
+      // Spectrum: prefer enableSpectrum; fallback to legacy enableCava
       let spectrumVal;
       if (flat.enableSpectrum !== undefined) spectrumVal = logicValue(flat.enableSpectrum);
       else if (flat.enableCava !== undefined) spectrumVal = logicValue(flat.enableCava);
       if (spectrumVal !== undefined) pref.display.spectrum = spectrumVal;
 
-      // Screen (guard against typos)
+      // Screen (allow all your variants)
       if (flat.display_screen !== undefined) {
         const scr = String(flat.display_screen);
-        const allowed = ['vu','minimal','digitalvuscreen','vuscreen','modern','original'];
+        const allowed = [
+          'vu','minimal','digitalvuscreen','vuscreen',
+          'modern','modern-bars','modern-dots','modern-osci',
+          'fm4','original'
+        ];
         pref.display.screen = allowed.includes(scr) ? scr : 'vu';
       }
 
@@ -738,7 +749,7 @@ ControllerQuadify.prototype.saveDisplay_settings = function (data) {
       self.commandRouter.pushToastMessage('success', 'Quadify', 'Display settings saved');
       return {};
     })
-    .catch(err => {
+    .fail(err => {
       self.logger.error('[Quadify] saveDisplay_settings: ' + err.message);
       self.commandRouter.pushToastMessage('error', 'Quadify', 'Failed to save display settings');
       return {};
@@ -771,7 +782,7 @@ ControllerQuadify.prototype.saveIr_controller = function (data) {
       self.commandRouter.pushToastMessage('success', 'Quadify', 'IR settings saved');
       return {};
     })
-    .catch(err => { self.logger.error('[Quadify] saveIr_controller: ' + err.message); return {}; });
+    .fail(err => { self.logger.error('[Quadify] saveIr_controller: ' + err.message); return {}; });
 };
 
 ControllerQuadify.prototype.saveButtons_leds = function (data) {
@@ -813,7 +824,35 @@ ControllerQuadify.prototype.saveButtons_leds = function (data) {
       self.commandRouter.pushToastMessage('success', 'Quadify', 'Buttons & LEDs saved');
       return {};
     })
-    .catch(err => { self.logger.error('[Quadify] saveButtons_leds: ' + err.message); return {}; });
+    .fail(err => { self.logger.error('[Quadify] saveButtons_leds: ' + err.message); return {}; });
+};
+
+// NEW: Safety save handler
+ControllerQuadify.prototype.saveSafety_controls = function (data) {
+  const self = this;
+  const flat = getFlatConfig(data || {});
+  const hwCfg = self.loadConfigYaml();
+
+  return loadRawPreferenceJSON()
+    .then(raw => {
+      const pref = buildCanonicalFromAny(raw, hwCfg);
+      if (flat.safe_shutdown_enabled !== undefined) pref.safety.safe_shutdown = logicValue(flat.safe_shutdown_enabled);
+      if (flat.clean_mode_enabled !== undefined)   pref.safety.clean_mode   = logicValue(flat.clean_mode_enabled);
+
+      const merged = shallowMerge(raw, pref);
+      return saveCanonicalPreference(merged).then(() => pref);
+    })
+    .then(pref => {
+      applyPreferenceToVconfInstance(self.config, pref);
+      self.config.save();
+      self.commandRouter.pushToastMessage('success', 'Quadify', 'Safety settings saved');
+      return {};
+    })
+    .fail(err => {
+      self.logger.error('[Quadify] saveSafety_controls: ' + err.message);
+      self.commandRouter.pushToastMessage('error', 'Quadify', 'Failed to save Safety settings');
+      return {};
+    });
 };
 
 // Detect which systemd unit we should control for Buttons & LEDs.
@@ -825,7 +864,7 @@ ControllerQuadify.prototype.detectButtonsLedsUnit = function () {
   const tryOne = (name) =>
     pExec(`${sudo} ${systemctl} status ${name}.service`, self.logger)
       .then(() => name)
-      .catch(() => null);
+      .fail(() => null);
 
   let chain = libQ.resolve(null);
   BUTTONSLEDS_UNIT_CANDIDATES.forEach((name) => {
@@ -862,7 +901,7 @@ ControllerQuadify.prototype.startCava = function () {
   const self = this;
   return pExec('/usr/bin/sudo /bin/systemctl start cava.service', self.logger)
     .then(() => self.commandRouter.pushToastMessage('success', 'Quadify', 'Spectrum started'))
-    .catch((e) => {
+    .fail((e) => {
       self.logger.error('[Quadify] startCava failed: ' + (e?.err?.message || e));
       self.commandRouter.pushToastMessage('error', 'Quadify', 'Failed to start Spectrum');
     });
@@ -872,7 +911,7 @@ ControllerQuadify.prototype.stopCava = function () {
   const self = this;
   return pExec('/usr/bin/sudo /bin/systemctl stop cava.service', self.logger)
     .then(() => self.commandRouter.pushToastMessage('success', 'Quadify', 'Spectrum stopped'))
-    .catch((e) => {
+    .fail((e) => {
       self.logger.error('[Quadify] stopCava failed: ' + (e?.err?.message || e));
       self.commandRouter.pushToastMessage('error', 'Quadify', 'Failed to stop Spectrum');
     });
@@ -882,11 +921,10 @@ ControllerQuadify.prototype.restartCava = function () {
   const self = this;
   return pExec('/usr/bin/sudo /bin/systemctl restart cava.service', self.logger)
     .then(() => self.commandRouter.pushToastMessage('success', 'Quadify', 'Spectrum restarted'))
-    .catch((e) => {
+    .fail((e) => {
       self.logger.error('[Quadify] restartCava failed: ' + (e?.err?.message || e));
       self.commandRouter.pushToastMessage('error', 'Quadify', 'Failed to restart Spectrum');
     });
 };
-
 
 module.exports = ControllerQuadify;

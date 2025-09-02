@@ -9,31 +9,71 @@
       "onSave": { "type": "controller", "endpoint": "system_hardware/quadify", "method": "saveDisplay_settings" },
       "content": [
         { "id": "enableSpectrum", "element": "switch", "label": "Spectrum (visualiser) On/Off", "value": false },
+
         {
           "id": "display_screen",
           "element": "select",
           "label": "Screen",
-          "value": "vu",
+          "value": "modern-bars",
           "options": [
-            { "label": "VU", "value": "vu" },
-            { "label": "Minimal", "value": "minimal" }
+            { "label": "— Modern — Bars",          "value": "modern-bars" },
+            { "label": "— Modern — Dots",          "value": "modern-dots" },
+            { "label": "— Modern — Oscilloscope",  "value": "modern-osci" },
+            { "label": "— Modern — No Spectrum",   "value": "modern" },
+
+            { "label": "Digital VU",               "value": "digitalvuscreen" },
+            { "label": "Classic VU",               "value": "vuscreen" },
+
+            { "label": "FM4",                      "value": "fm4" },
+            { "label": "Original",                 "value": "original" },
+            { "label": "Minimal",                  "value": "minimal" }
           ]
         },
+
         {
           "id": "display_rotate",
           "element": "select",
           "label": "Rotate",
           "value": "0",
           "options": [
-            { "label": "0°", "value": "0" },
-            { "label": "90°", "value": "90" },
+            { "label": "0°",   "value": "0" },
+            { "label": "90°",  "value": "90" },
             { "label": "180°", "value": "180" },
             { "label": "270°", "value": "270" }
           ]
+        },
+
+        {
+          "element": "button",
+          "label": "Start Spectrum",
+          "onClick": {
+            "type": "emit",
+            "message": "callMethod",
+            "data": { "endpoint": "system_hardware/quadify", "method": "startCava", "data": "" }
+          }
+        },
+        {
+          "element": "button",
+          "label": "Stop Spectrum",
+          "onClick": {
+            "type": "emit",
+            "message": "callMethod",
+            "data": { "endpoint": "system_hardware/quadify", "method": "stopCava", "data": "" }
+          }
+        },
+        {
+          "element": "button",
+          "label": "Restart Spectrum",
+          "onClick": {
+            "type": "emit",
+            "message": "callMethod",
+            "data": { "endpoint": "system_hardware/quadify", "method": "restartCava", "data": "" }
+          }
         }
       ],
       "saveButton": { "label": "Save", "data": ["enableSpectrum", "display_screen", "display_rotate"] }
     },
+
     {
       "id": "buttons_leds",
       "label": "Buttons & LEDs (MCP23017)",
@@ -55,6 +95,7 @@
       ],
       "saveButton": { "label": "Save", "data": ["enableButtonsLED", "mcp23017_address"] }
     },
+
     {
       "id": "ir_controller",
       "label": "IR Controller",
@@ -77,6 +118,7 @@
       ],
       "saveButton": { "label": "Save", "data": ["enableIR", "ir_remote_profile", "ir_gpio_pin"] }
     },
+
     {
       "id": "safety_controls",
       "label": "Safety",
@@ -89,39 +131,13 @@
       ],
       "saveButton": { "label": "Save", "data": ["safe_shutdown_enabled", "clean_mode_enabled"] }
     },
+
     {
       "id": "actions",
       "label": "Actions",
       "element": "section",
       "icon": "fa-cogs",
       "content": [
-        {
-          "element": "button",
-          "label": "Start Spectrum (CAVA)",
-          "onClick": {
-            "type": "emit",
-            "message": "callMethod",
-            "data": { "endpoint": "system_hardware/quadify", "method": "startCava", "data": "" }
-          }
-        },
-        {
-          "element": "button",
-          "label": "Stop Spectrum (CAVA)",
-          "onClick": {
-            "type": "emit",
-            "message": "callMethod",
-            "data": { "endpoint": "system_hardware/quadify", "method": "stopCava", "data": "" }
-          }
-        },
-        {
-          "element": "button",
-          "label": "Restart Spectrum (CAVA)",
-          "onClick": {
-            "type": "emit",
-            "message": "callMethod",
-            "data": { "endpoint": "system_hardware/quadify", "method": "restartCava", "data": "" }
-          }
-        },
         {
           "element": "button",
           "label": "Restart Quadify",
