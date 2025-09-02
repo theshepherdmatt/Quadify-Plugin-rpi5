@@ -1,43 +1,42 @@
 #!/bin/sh
-# Quadify install script — POSIX /bin/sh compatible
+# Quadify install script — first-install only (no cleanup), POSIX /bin/sh
 
 set -eu
 
-cd "$(dirname "$0")"
+# -----------------------------
+# Basics
+# -----------------------------
+cd "$(dirname "$0")" || exit 1
 LOG_FILE="install.log"
-: > "$LOG_FILE"  # truncate
+: > "$LOG_FILE"
 
 log()  { echo "[Quadify Install] $*" | tee -a "$LOG_FILE"; }
 warn() { echo "[Quadify Install] WARN: $*" | tee -a "$LOG_FILE"; }
 
-# Absolute install path
 PLUGIN_DIR="$(pwd)"
 
-# ----- helpers -----
-check_cmd() { command -v "$1" >/dev/null 2>&1; }
-
 run() {
-  # echo the command, run it; never hard-fail the installer
+  # echo the command, run it; fail if it fails
   echo "\$ $*" | tee -a "$LOG_FILE"
-  if ! "$@"; then
-    warn "'$*' failed (continuing)"
-    return 0
-  fi
+  "$@" || { warn "Command failed: $*"; exit 1; }
 }
 
+# -----------------------------
+# CAVA (optional local build)
+# -----------------------------
 install_cava_from_fork() {
-  log "Installing CAVA from fork into plugin folder..."
+  log "Installing CAVA (local build)…"
   REPO="https://github.com/theshepherdmatt/cava.git"
   BUILD="/tmp/cava_build_$$"
   PREFIX="$PLUGIN_DIR/cava"
 
   run rm -rf "$BUILD" "$PREFIX"
-  log "Installing build deps for CAVA..."
-  run apt-get install -y libfftw3-dev libasound2-dev libncursesw5-dev libpulse-dev libtool automake autoconf gcc make pkg-config libiniparser-dev
+  run apt-get install -y \
+    git libfftw3-dev libasound2-dev libncursesw5-dev libpulse-dev \
+    libtool automake autoconf gcc make pkg-config libiniparser-dev
 
-  run git clone "$REPO" "$BUILD" || return 0
-
-  ( cd "$BUILD" && run autoreconf -fi && run ./configure --prefix="$PREFIX" && run make && run make install ) || true
+  run git clone "$REPO" "$BUILD"
+  ( cd "$BUILD" && run autoreconf -fi && run ./configure --prefix="$PREFIX" && run make && run make install )
 
   run mkdir -p "$PREFIX/config"
   if [ -f "$BUILD/config/default_config" ]; then
@@ -54,6 +53,9 @@ install_cava_from_fork() {
   log "CAVA installed at $PREFIX"
 }
 
+# -----------------------------
+# MPD FIFO (template append, idempotent)
+# -----------------------------
 configure_mpd_fifo() {
   log "Configuring MPD FIFO…"
 
@@ -66,264 +68,239 @@ configure_mpd_fifo() {
     return 0
   fi
 
-  # Remove any previous marked block (prevents duplicates / corruption)
-  sudo sed -i "/$START/,/$END/d" "$MPD_TMPL"
-
-  # Append a clean, unquoted block (matches Volumio style)
-  sudo tee -a "$MPD_TMPL" >/dev/null <<'EOF'
+  # Only append if not already present
+  if ! grep -q "$START" "$MPD_TMPL"; then
+    sudo tee -a "$MPD_TMPL" >/dev/null <<'EOF'
 
 # --- QUADIFY_CAVA_FIFO_START ---
 audio_output {
-    type            fifo
-    name            my_fifo
-    path            /tmp/cava.fifo
-    format          44100:16:2
+    type            "fifo"
+    name            "my_fifo"
+    path            "/tmp/cava.fifo"
+    format          "44100:16:2"
 }
 # --- QUADIFY_CAVA_FIFO_END ---
 EOF
-
-  # Let Volumio regenerate /etc/mpd.conf from the template
-  run systemctl restart volumio
-
-  # Quick sanity check (best-effort)
-  if grep -q "/tmp/cava.fifo" /etc/mpd.conf 2>/dev/null; then
-    log "Verified: cava FIFO present in /etc/mpd.conf"
+    log "FIFO block appended to MPD template."
   else
-    warn "FIFO not visible yet; Volumio may regenerate shortly after boot."
-  fi
-}
-
-write_unit() {
-  # write_unit <name> <Description> <WorkingDir REL or -> <ExecStart CMD or REL>
-  NAME="$1"; shift
-  DESC="$1"; shift
-  WDIR_REL="$1"; shift
-  EXEC_CMD="$1"; shift
-
-  UNIT="/etc/systemd/system/$NAME"
-  WDIR_LINE=""
-  EXEC_LINE=""
-
-  if [ "$WDIR_REL" != "-" ]; then
-    WDIR_LINE="WorkingDirectory=${PLUGIN_DIR}/${WDIR_REL}"
+    log "FIFO block already present; skipping."
   fi
 
-  case "$EXEC_CMD" in
-    /*) EXEC_LINE="ExecStart=${EXEC_CMD}" ;;
-    *)
-      case "$EXEC_CMD" in
-        ./*) EXEC_LINE="ExecStart=${PLUGIN_DIR}/${EXEC_CMD#./}" ;;
-        *)   EXEC_LINE="ExecStart=/usr/bin/env ${EXEC_CMD}" ;;
-      esac
-    ;;
-  esac
-
-  umask 022
-  {
-    echo "[Unit]"
-    echo "Description=${DESC}"
-    echo "After=network.target"
-    echo
-    echo "[Service]"
-    echo "Type=simple"
-    echo "User=volumio"
-    [ -n "$WDIR_LINE" ] && echo "$WDIR_LINE"
-    echo "$EXEC_LINE"
-    echo "Restart=always"
-    echo "RestartSec=5"
-    echo
-    echo "[Install]"
-    echo "WantedBy=multi-user.target"
-  } | tee "$UNIT" >/dev/null
-
-  run chmod 644 "$UNIT"
-  log "Installed unit: $NAME → $UNIT"
+  # Let Volumio regenerate /etc/mpd.conf from the template (best effort)
+  run systemctl restart volumio || true
 }
 
-rewrite_or_generate_unit_from_template() {
-  SVC="$1"
+# -----------------------------
+# systemd helper
+# -----------------------------
+install_unit_from_template_or_simple() {
+  # install_unit_from_template_or_simple <svc> <desc> <workdir_rel_or_-> <exec>
+  SVC="$1"; DESC="$2"; WORKDIR_REL="$3"; EXEC_CMD="$4"
   TEMPLATE="$PLUGIN_DIR/quadifyapp/service/$SVC"
   DST="/etc/systemd/system/$SVC"
 
   if [ -f "$TEMPLATE" ]; then
-    log "Installing $SVC from template (path-corrected)"
-    sed -e "s#/data/plugins/music_service/quadify#${PLUGIN_DIR}#g" \
-        -e "s#/data/plugins/system_hardware/quadify#${PLUGIN_DIR}#g" \
-        "$TEMPLATE" | tee "$DST" >/dev/null
+    log "Installing $SVC from template"
+    run cp "$TEMPLATE" "$DST"
     run chmod 644 "$DST"
     return 0
   fi
 
-  case "$SVC" in
-    ir_listener.service)
-      write_unit "ir_listener.service" \
-        "IR Listener Service for Quadify" \
-        "quadifyapp/src/hardware" \
-        "python3 ${PLUGIN_DIR}/quadifyapp/src/hardware/ir_listener.py"
-    ;;
-    early_led8.service)
-      write_unit "early_led8.service" \
-        "Early LED8 Buttons/LED Service for Quadify" \
-        "quadifyapp/src/hardware" \
-        "python3 ${PLUGIN_DIR}/quadifyapp/src/hardware/early_led8.py"
-    ;;
-    cava.service)
-      CAVA_BIN="${PLUGIN_DIR}/cava/bin/cava"
-      CAVA_CFG="${PLUGIN_DIR}/cava/config/default_config"
-      if [ -x "$CAVA_BIN" ]; then
-        write_unit "cava.service" "CAVA Visualizer for Quadify" "-" "${CAVA_BIN} -p ${CAVA_CFG}"
-      else
-        write_unit "cava.service" "CAVA Visualizer (system) for Quadify" "-" "cava -p ${CAVA_CFG}"
-      fi
-    ;;
-    quadify.service)
-      warn "No template for quadify.service and no fallback specified; skipping"
-      return 0
-    ;;
-    *)
-      warn "Unknown service $SVC; skipping"
-      return 0
-    ;;
+  # Fallback: simple unit
+  WDIR_LINE=""
+  [ "$WORKDIR_REL" != "-" ] && WDIR_LINE="WorkingDirectory=$PLUGIN_DIR/$WORKDIR_REL"
+
+  case "$EXEC_CMD" in
+    /*) EXEC_LINE="$EXEC_CMD" ;;
+    ./*) EXEC_LINE="$PLUGIN_DIR/${EXEC_CMD#./}" ;;
+    *)   EXEC_LINE="/usr/bin/env $EXEC_CMD" ;;
   esac
+
+  umask 022
+  cat <<EOF | sudo tee "$DST" >/dev/null
+[Unit]
+Description=$DESC
+After=network.target
+
+[Service]
+Type=simple
+User=volumio
+$WDIR_LINE
+ExecStart=$EXEC_LINE
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  run chmod 644 "$DST"
 }
 
-# ----- install flow -----
-log "Installing system dependencies..."
+# -----------------------------
+# 1) APT: core packages
+# -----------------------------
+log "Installing system dependencies…"
 run apt-get update
-run apt-get install -y python3 python3-pip python3-venv \
+run apt-get install -y \
+  python3 python3-pip python3-venv \
+  i2c-tools python3-smbus \
+  lirc lsof \
   libjpeg-dev zlib1g-dev libfreetype6-dev \
-  i2c-tools python3-smbus libgirepository1.0-dev \
-  pkg-config libcairo2-dev libffi-dev build-essential \
-  libxml2-dev libxslt1-dev libssl-dev lirc lsof \
+  libgirepository1.0-dev libcairo2-dev libffi-dev build-essential \
+  libxml2-dev libxslt1-dev libssl-dev \
   python3-gi python3-cairo gir1.2-gtk-3.0 \
-  libcairo2 libpango-1.0-0 libgdk-pixbuf-2.0-0
+  pkg-config
 
-log "Cleaning up Python packaging conflicts..."
-run pip3 uninstall -y importlib-metadata setuptools python-socketio socketio socketIO-client >/dev/null 2>&1 || true
-
-log "Upgrading pip and setuptools (best effort)..."
-run python3 -m pip install --no-cache-dir --upgrade pip setuptools importlib-metadata
-
-log "Installing core Python runtime libs (apt) needed by CairoSVG..."
-run apt-get install -y libcairo2 libgdk-pixbuf-2.0-0 libpango-1.0-0 python3-cairo || true
-
-log "Installing Python deps from requirements.txt (best effort, with CairoSVG fallbacks)..."
+# -----------------------------
+# 2) Python deps (full requirements)
+# -----------------------------
 REQ_PATH=""
-if [ -f "./quadifyapp/requirements.txt" ]; then
-  REQ_PATH="./quadifyapp/requirements.txt"
-elif [ -f "./requirements.txt" ]; then
-  REQ_PATH="./requirements.txt"
-fi
+[ -f "$PLUGIN_DIR/quadifyapp/requirements.txt" ] && REQ_PATH="$PLUGIN_DIR/quadifyapp/requirements.txt"
+[ -z "$REQ_PATH" ] && [ -f "$PLUGIN_DIR/requirements.txt" ] && REQ_PATH="$PLUGIN_DIR/requirements.txt"
+
+log "Upgrading pip/setuptools…"
+run python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel
+
 if [ -n "$REQ_PATH" ]; then
+  log "Installing Python requirements from: $REQ_PATH"
   run python3 -m pip install --no-cache-dir --upgrade --ignore-installed -r "$REQ_PATH"
-  run python3 - <<'PY'
+else
+  warn "requirements.txt not found; skipping Python bulk install"
+fi
+
+# CairoSVG stack (safety net)
+python3 - <<'PY' || true
 try:
     import cairosvg
-    print("CairoSVG OK", getattr(cairosvg, "__version__", "?"))
+    print("CairoSVG present:", getattr(cairosvg, "__version__", "?"))
 except Exception:
-    import subprocess, sys
-    print("CairoSVG missing, attempting explicit install...")
+    import sys, subprocess
+    print("Installing CairoSVG stack…")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-cache-dir",
                            "cairosvg", "cssselect2", "tinycss2", "defusedxml", "cairocffi"])
 PY
-else
-  warn "requirements.txt missing, skipping Python deps"
-fi
 
-log "Installing Node.js dependencies..."
-if [ -f package.json ]; then
+# -----------------------------
+# 3) Node (optional)
+# -----------------------------
+if [ -f "$PLUGIN_DIR/package.json" ]; then
+  log "Installing Node.js deps (production)…"
   run npm install --production --silent
-  log "Node.js dependencies installed."
 else
-  warn "package.json not found, skipping npm install."
+  log "No package.json found; skipping npm install."
 fi
 
-log "Enabling I2C/SPI overlays..."
+# -----------------------------
+# 4) Enable I²C/SPI + IR
+# -----------------------------
+log "Enabling I2C/SPI & IR overlays…"
 CONFIG_FILE="/boot/userconfig.txt"
 run touch "$CONFIG_FILE"
-grep -qxF 'dtparam=spi=on' "$CONFIG_FILE"  || echo 'dtparam=spi=on'  | tee -a "$CONFIG_FILE" >/dev/null
-grep -qxF 'dtparam=i2c_arm=on' "$CONFIG_FILE" || echo 'dtparam=i2c_arm=on' | tee -a "$CONFIG_FILE" >/dev/null
+grep -qxF 'dtparam=spi=on' "$CONFIG_FILE"  || echo 'dtparam=spi=on'  | sudo tee -a "$CONFIG_FILE" >/dev/null
+grep -qxF 'dtparam=i2c_arm=on' "$CONFIG_FILE" || echo 'dtparam=i2c_arm=on' | sudo tee -a "$CONFIG_FILE" >/dev/null
+grep -qxF 'dtoverlay=gpio-ir,gpio_pin=27' "$CONFIG_FILE" || echo 'dtoverlay=gpio-ir,gpio_pin=27' | sudo tee -a "$CONFIG_FILE" >/dev/null
 run modprobe i2c-dev || true
 run modprobe spi-bcm2835 || true
 
-log "Adding IR overlay (gpio27) to userconfig.txt..."
-grep -qxF 'dtoverlay=gpio-ir,gpio_pin=27' "$CONFIG_FILE" || echo 'dtoverlay=gpio-ir,gpio_pin=27' | tee -a "$CONFIG_FILE" >/dev/null
-
-log "Configuring LIRC options for GPIO IR..."
-LIRC_DIR="/etc/lirc"
-LIRC_OPTIONS="$LIRC_DIR/lirc_options.conf"
-run mkdir -p "$LIRC_DIR"
+log "Configuring LIRC (/etc/lirc/lirc_options.conf)…"
+LIRC_OPTIONS="/etc/lirc/lirc_options.conf"
 if [ -f "$LIRC_OPTIONS" ]; then
   run sed -i 's|^driver\s*=.*|driver = default|' "$LIRC_OPTIONS"
   run sed -i 's|^device\s*=.*|device = /dev/lirc0|' "$LIRC_OPTIONS"
-  log "Updated existing lirc_options.conf"
 else
-  umask 022
-  cat > "$LIRC_OPTIONS" <<EOF
+  cat <<EOF | sudo tee "$LIRC_OPTIONS" >/dev/null
 [lircd]
-nodaemon        = False
-driver          = default
-device          = /dev/lirc0
+nodaemon = False
+driver = default
+device = /dev/lirc0
 EOF
-  log "Created new lirc_options.conf"
 fi
-run systemctl restart lircd || warn "lircd restart failed (continuing)"
+run systemctl restart lircd || true
 
-# ----- systemd units -----
-log "Removing any old units..."
-run systemctl stop ir_listener.service early_led8.service cava.service quadify.service || true
-run systemctl disable ir_listener.service early_led8.service cava.service quadify.service || true
-run rm -f /etc/systemd/system/ir_listener.service \
-          /etc/systemd/system/early_led8.service \
-          /etc/systemd/system/cava.service \
-          /etc/systemd/system/quadify.service \
-          /etc/systemd/system/ir_listener.service.service \
-          /etc/systemd/system/early_led8.service.service \
-          /etc/systemd/system/cava.service.service || true
-run systemctl daemon-reload || true
+# -----------------------------
+# 5) systemd services (no cleanup; first install)
+# -----------------------------
+log "Installing systemd services…"
 
-log "Installing systemd units (path-corrected to $PLUGIN_DIR)..."
-for svc in quadify.service ir_listener.service early_led8.service cava.service; do
-  rewrite_or_generate_unit_from_template "$svc"
-done
+# quadify.service
+install_unit_from_template_or_simple \
+  "quadify.service" \
+  "Main Quadify Service" \
+  "quadifyapp" \
+  "/usr/bin/python3 $PLUGIN_DIR/quadifyapp/src/main.py"
 
-run systemctl daemon-reload || true
-if [ -f /etc/systemd/system/quadify.service ]; then
-  run systemctl enable quadify.service
-  run systemctl restart quadify.service || true
-  log "quadify.service enabled & restarted"
-else
-  log "quadify.service not present (skipping enable/start)"
+# ir_listener.service (only if script exists)
+if [ -f "$PLUGIN_DIR/quadifyapp/src/hardware/ir_listener.py" ]; then
+  install_unit_from_template_or_simple \
+    "ir_listener.service" \
+    "IR Listener Service for Quadify" \
+    "quadifyapp/src/hardware" \
+    "/usr/bin/python3 $PLUGIN_DIR/quadifyapp/src/hardware/ir_listener.py"
 fi
-log "IR/LED/CAVA services will be controlled from the plugin UI."
 
-# ----- MPD & CAVA -----
+# early_led8.service (only if script exists)
+if [ -f "$PLUGIN_DIR/quadifyapp/src/hardware/early_led8.py" ]; then
+  install_unit_from_template_or_simple \
+    "early_led8.service" \
+    "Early LED8 Buttons/LED Service for Quadify" \
+    "quadifyapp/src/hardware" \
+    "/usr/bin/python3 $PLUGIN_DIR/quadifyapp/src/hardware/early_led8.py"
+fi
+
+# cava.service (prefer local build)
+CAVA_BIN="$PLUGIN_DIR/cava/bin/cava"
+CAVA_CFG="$PLUGIN_DIR/cava/config/default_config"
+if [ -x "$CAVA_BIN" ] || command -v cava >/dev/null 2>&1; then
+  [ -x "$CAVA_BIN" ] && CAVA_CMD="$CAVA_BIN -p $CAVA_CFG" || CAVA_CMD="$(command -v cava) -p $CAVA_CFG"
+  install_unit_from_template_or_simple \
+    "cava.service" \
+    "CAVA Visualizer for Quadify" \
+    "-" \
+    "$CAVA_CMD"
+fi
+
+run systemctl daemon-reload
+# enable quadify right away; the others can be toggled in UI if desired
+run systemctl enable --now quadify.service || true
+[ -f /etc/systemd/system/ir_listener.service ] && run systemctl enable ir_listener.service || true
+[ -f /etc/systemd/system/early_led8.service ] && run systemctl enable early_led8.service || true
+[ -f /etc/systemd/system/cava.service ] && run systemctl enable cava.service || true
+
+# -----------------------------
+# 6) MPD FIFO + CAVA (optional)
+# -----------------------------
 configure_mpd_fifo
 
-log "Installing CAVA (local copy into plugin dir)..."
-install_cava_from_fork
-
-# Fallback to system cava if build failed
-if [ ! -x "$PLUGIN_DIR/cava/bin/cava" ]; then
-  log "Local CAVA missing; installing system package fallback"
+log "Installing CAVA (local build); will fall back to system package if build fails…"
+if install_cava_from_fork; then
+  log "Local CAVA built."
+else
+  warn "Local CAVA build failed; installing system cava as fallback."
   run apt-get update
   run apt-get install -y cava
 fi
 
-# ----- perms & sanity -----
-log "Setting permissions on plugin folder..."
+# -----------------------------
+# 7) Permissions
+# -----------------------------
+log "Setting permissions on plugin folder…"
 run chown -R volumio:volumio "$PLUGIN_DIR"
 run chmod -R 755 "$PLUGIN_DIR"
 
-log "Packaging sanity check..."
+# -----------------------------
+# 8) Sanity ping
+# -----------------------------
 python3 - <<'PY' || true
-try:
-    import importlib_metadata, setuptools
-    print("OK:", hasattr(importlib_metadata, 'version'), setuptools.__version__)
-except Exception as e:
-    print("WARN: packaging check failed:", e)
+import importlib
+mods = ["RPi.GPIO","smbus2","yaml","cairosvg","PIL","luma.core","luma.oled"]
+for m in mods:
+    try:
+        importlib.import_module(m)
+        print(f"{m:12s}: OK")
+    except Exception as e:
+        print(f"{m:12s}: MISSING ({e.__class__.__name__})")
 PY
 
-log "Install complete."
+log "Install complete. Reboot recommended."
 exit 0
 
