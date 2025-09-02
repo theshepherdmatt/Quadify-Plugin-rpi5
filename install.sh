@@ -86,8 +86,6 @@ EOF
     log "FIFO block already present; skipping."
   fi
 
-  # Let Volumio regenerate /etc/mpd.conf from the template (best effort)
-  run systemctl restart volumio || true
 }
 
 # -----------------------------
