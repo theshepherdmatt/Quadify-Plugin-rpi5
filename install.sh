@@ -16,7 +16,6 @@ warn() { echo "[Quadify Install] WARN: $*" | tee -a "$LOG_FILE"; }
 PLUGIN_DIR="$(pwd)"
 
 run() {
-  # echo the command, run it; fail if it fails
   echo "\$ $*" | tee -a "$LOG_FILE"
   "$@" || { warn "Command failed: $*"; exit 1; }
 }
@@ -61,14 +60,12 @@ configure_mpd_fifo() {
 
   MPD_TMPL="/volumio/app/plugins/music_service/mpd/mpd.conf.tmpl"
   START="# --- QUADIFY_CAVA_FIFO_START ---"
-  END="# --- QUADIFY_CAVA_FIFO_END ---"
 
   if [ ! -f "$MPD_TMPL" ]; then
     warn "MPD template not found: $MPD_TMPL"
     return 0
   fi
 
-  # Only append if not already present
   if ! grep -q "$START" "$MPD_TMPL"; then
     sudo tee -a "$MPD_TMPL" >/dev/null <<'EOF'
 
@@ -85,7 +82,6 @@ EOF
   else
     log "FIFO block already present; skipping."
   fi
-
 }
 
 # -----------------------------
@@ -104,7 +100,6 @@ install_unit_from_template_or_simple() {
     return 0
   fi
 
-  # Fallback: simple unit
   WDIR_LINE=""
   [ "$WORKDIR_REL" != "-" ] && WDIR_LINE="WorkingDirectory=$PLUGIN_DIR/$WORKDIR_REL"
 
@@ -150,7 +145,7 @@ run apt-get install -y \
   pkg-config
 
 # -----------------------------
-# 2) Python deps (full requirements)
+# 2) Python deps
 # -----------------------------
 REQ_PATH=""
 [ -f "$PLUGIN_DIR/quadifyapp/requirements.txt" ] && REQ_PATH="$PLUGIN_DIR/quadifyapp/requirements.txt"
@@ -166,7 +161,7 @@ else
   warn "requirements.txt not found; skipping Python bulk install"
 fi
 
-# CairoSVG stack (safety net)
+# CairoSVG safety net
 python3 - <<'PY' || true
 try:
     import cairosvg
@@ -216,7 +211,7 @@ fi
 run systemctl restart lircd || true
 
 # -----------------------------
-# 5) systemd services (no cleanup; first install)
+# 5) systemd services
 # -----------------------------
 log "Installing systemd services…"
 
@@ -227,7 +222,7 @@ install_unit_from_template_or_simple \
   "quadifyapp" \
   "/usr/bin/python3 $PLUGIN_DIR/quadifyapp/src/main.py"
 
-# ir_listener.service (only if script exists)
+# ir_listener.service (if script exists)
 if [ -f "$PLUGIN_DIR/quadifyapp/src/hardware/ir_listener.py" ]; then
   install_unit_from_template_or_simple \
     "ir_listener.service" \
@@ -236,7 +231,7 @@ if [ -f "$PLUGIN_DIR/quadifyapp/src/hardware/ir_listener.py" ]; then
     "/usr/bin/python3 $PLUGIN_DIR/quadifyapp/src/hardware/ir_listener.py"
 fi
 
-# early_led8.service (only if script exists)
+# early_led8.service (if script exists)
 if [ -f "$PLUGIN_DIR/quadifyapp/src/hardware/early_led8.py" ]; then
   install_unit_from_template_or_simple \
     "early_led8.service" \
@@ -245,38 +240,45 @@ if [ -f "$PLUGIN_DIR/quadifyapp/src/hardware/early_led8.py" ]; then
     "/usr/bin/python3 $PLUGIN_DIR/quadifyapp/src/hardware/early_led8.py"
 fi
 
-# cava.service (prefer local build)
-CAVA_BIN="$PLUGIN_DIR/cava/bin/cava"
-CAVA_CFG="$PLUGIN_DIR/cava/config/default_config"
-if [ -x "$CAVA_BIN" ] || command -v cava >/dev/null 2>&1; then
-  [ -x "$CAVA_BIN" ] && CAVA_CMD="$CAVA_BIN -p $CAVA_CFG" || CAVA_CMD="$(command -v cava) -p $CAVA_CFG"
-  install_unit_from_template_or_simple \
-    "cava.service" \
-    "CAVA Visualizer for Quadify" \
-    "-" \
-    "$CAVA_CMD"
-fi
+# cava.service — install unconditionally now (points to local-build path)
+install_unit_from_template_or_simple \
+  "cava.service" \
+  "CAVA Visualizer for Quadify" \
+  "-" \
+  "/data/plugins/system_hardware/quadify/cava/bin/cava -p /data/plugins/system_hardware/quadify/cava/config/default_config"
 
 run systemctl daemon-reload
-# enable quadify right away; the others can be toggled in UI if desired
 run systemctl enable --now quadify.service || true
 [ -f /etc/systemd/system/ir_listener.service ] && run systemctl enable ir_listener.service || true
 [ -f /etc/systemd/system/early_led8.service ] && run systemctl enable early_led8.service || true
-[ -f /etc/systemd/system/cava.service ] && run systemctl enable cava.service || true
 
 # -----------------------------
-# 6) MPD FIFO + CAVA (optional)
+# 6) MPD FIFO + CAVA
 # -----------------------------
 configure_mpd_fifo
 
 log "Installing CAVA (local build); will fall back to system package if build fails…"
+FALLBACK=0
 if install_cava_from_fork; then
   log "Local CAVA built."
 else
   warn "Local CAVA build failed; installing system cava as fallback."
+  FALLBACK=1
   run apt-get update
   run apt-get install -y cava
 fi
+
+# If fallback to system cava, point ExecStart to system binary
+if [ "$FALLBACK" -eq 1 ]; then
+  CAVA_SYS_BIN="$(command -v cava || true)"
+  if [ -n "$CAVA_SYS_BIN" ]; then
+    sudo sed -i "s|^ExecStart=.*|ExecStart=$CAVA_SYS_BIN -p /data/plugins/system_hardware/quadify/cava/config/default_config|" \
+      /etc/systemd/system/cava.service || true
+  fi
+fi
+
+run systemctl daemon-reload
+run systemctl enable --now cava.service || true
 
 # -----------------------------
 # 7) Permissions
@@ -301,4 +303,3 @@ PY
 
 log "Install complete. Reboot recommended."
 exit 0
-
