@@ -4,11 +4,11 @@ import time
 import os
 import subprocess
 
-# Global dictionary for debouncing
+# Debounce (per key)
 last_processed_time = {}
-DEBOUNCE_TIME = 0.3  # seconds, adjust as needed
+DEBOUNCE_TIME = 0.15  # was 0.3 — make it feel faster
 
-def send_command(command, retries=5, delay=0.5):
+def send_command(command, retries=5, delay=0.2):
     sock_path = "/tmp/quadify.sock"
     for attempt in range(retries):
         try:
@@ -16,29 +16,30 @@ def send_command(command, retries=5, delay=0.5):
             s.connect(sock_path)
             s.sendall(command.encode("utf-8"))
             s.close()
-            return  # Success
+            return
         except Exception as e:
-            print(f"Attempt {attempt+1}: Error sending command '{command}': {e}")
+            print(f"Attempt {attempt+1}: error sending '{command}': {e}")
             time.sleep(delay)
-    print(f"Failed to send command '{command}' after {retries} attempts.")
-
+    print(f"Failed to send '{command}' after {retries} attempts.")
 
 def process_key(key, current_mode):
-    """Decide what command to run based on the key and current mode, with debouncing."""
     now = time.time()
     if key in last_processed_time and (now - last_processed_time[key]) < DEBOUNCE_TIME:
-        print(f"Ignoring duplicate key: {key}")
+        # print(f"Debounced: {key}")
         return
     last_processed_time[key] = now
 
-    print(f"Processing key: {key} in mode: {current_mode}")
-    
+    print(f"Key: {key}  Mode: {current_mode}")
+
     if key == "KEY_HOME":
         send_command("home")
 
     elif key == "KEY_OK":
-        # In menu or tidal mode, KEY_OK selects the item.
-        if current_mode in ["menu", "streaming", "tidal", "qobuz", "spotify", "library", "radiomanager", "playlists", "screensaver", "configmenu", "clockmenu", "screensavermenu", "systemupdate", "radioparadise", "motherearthradio"]:
+        if current_mode in [
+            "menu","streaming","tidal","qobuz","spotify","library","radiomanager",
+            "playlists","screensaver","configmenu","clockmenu","screensavermenu",
+            "systemupdate","radioparadise","motherearthradio"
+        ]:
             send_command("select")
         elif current_mode in ["clock", "screensaver"]:
             send_command("toggle")
@@ -51,20 +52,19 @@ def process_key(key, current_mode):
         elif current_mode == "clock":
             send_command("menu")
         else:
-            pass
+            send_command("repeat")
 
     elif key == "KEY_LEFT":
         if current_mode in ["original", "minimal", "modern", "webradio"]:
             send_command("skip_previous")
-        elif current_mode in ["menu"]:
+        elif current_mode == "menu":
             send_command("scroll_left")
 
     elif key == "KEY_RIGHT":
         if current_mode in ["original", "minimal", "modern", "webradio"]:
             send_command("skip_next")
-        elif current_mode in ["menu"]:
+        elif current_mode == "menu":
             send_command("scroll_right")
-
 
     elif key == "KEY_VOLUMEUP":
         send_command("volume_plus")
@@ -72,85 +72,83 @@ def process_key(key, current_mode):
     elif key == "KEY_VOLUMEDOWN":
         send_command("volume_minus")
 
-
     elif key == "KEY_UP":
         if current_mode in ["original", "modern", "minimal", "webradio"]:
             send_command("seek_plus")
-        elif current_mode in ["streaming", "tidal", "qobuz", "spotify", "library", "playlists", "radiomanager", 
-                            "displaymenu", "clockmenu", "configmenu", "screensavermenu", "systemupdate", "radioparadise", "motherearthradio"]:
+        elif current_mode in [
+            "streaming","tidal","qobuz","spotify","library","playlists","radiomanager",
+            "displaymenu","clockmenu","configmenu","screensavermenu","systemupdate",
+            "radioparadise","motherearthradio"
+        ]:
             send_command("scroll_up")
-        else:
-            print("No mapping for KEY_UP in current mode.")
 
     elif key == "KEY_DOWN":
         if current_mode in ["original", "modern", "minimal", "webradio"]:
             send_command("seek_minus")
-        elif current_mode in ["streaming", "tidal", "qobuz", "spotify", "library", "playlists", "radiomanager", 
-                            "displaymenu", "clockmenu", "configmenu", "screensavermenu", "systemupdate", "radioparadise", "motherearthradio"]:
+        elif current_mode in [
+            "streaming","tidal","qobuz","spotify","library","playlists","radiomanager",
+            "displaymenu","clockmenu","configmenu","screensavermenu","systemupdate",
+            "radioparadise","motherearthradio"
+        ]:
             send_command("scroll_down")
-        else:
-            print("No mapping for KEY_DOWN in current mode.")
 
-    
     elif key in ["KEY_BACK", "KEY_EXIT", "KEY_RETURN"]:
         send_command("back")
 
     elif key == "KEY_POWER":
         send_command("shutdown")
-    else:
-        print(f"No mapping for key: {key}")
-
 
 def get_current_mode():
-    """
-    Reads the current Quadify mode from a file.
-    Ensure your Quadify application writes the current mode to /tmp/quadify_mode.
-    """
     try:
         with open("/tmp/quadify_mode", "r") as f:
             return f.read().strip()
     except Exception:
-        return "clock"  # Default mode if file not found
+        return "clock"
 
 def ir_event_listener():
-    """
-    Listens for IR events from the LIRC socket and processes them.
-    """
-    # Path to LIRC's Unix socket (default is usually /var/run/lirc/lircd)
-    sock_path = "/var/run/lirc/lircd"
+    # Prefer /run, fall back to /var/run
+    sock_path = "/run/lirc/lircd"
     if not os.path.exists(sock_path):
-        print(f"Error: LIRC socket {sock_path} not found!")
-        return
+        fallback = "/var/run/lirc/lircd"
+        if os.path.exists(fallback):
+            sock_path = fallback
+        else:
+            print(f"Error: LIRC socket not found at /run/lirc/lircd or /var/run/lirc/lircd")
+            return
 
-    # Create a Unix socket and connect to LIRC daemon
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.connect(sock_path)
-    s.setblocking(False)
-    print("IR listener connected to LIRC socket.")
+    # Read line by line in blocking mode — lowest latency & simplest
+    f = s.makefile("r")
+    print(f"IR listener connected to {sock_path}")
 
     try:
-        while True:
+        for line in f:
+            # Typical: "0000000000000001 00 KEY_POWER /home/volumio/lircd.conf"
+            parts = line.strip().split()
+            if len(parts) < 3:
+                continue
+            repeat_hex = parts[1]
+            key = parts[2]
+
+            # Ignore repeat frames (keeps things from double-firing)
+            # If you ever want hold-to-scroll, remove this check.
             try:
-                data = s.recv(1024)
-                if data:
-                    # LIRC events are typically sent as lines of text.
-                    lines = data.decode("utf-8").splitlines()
-                    for line in lines:
-                        # Expected line format:
-                        # "0000000000000001 00 KEY_POWER /home/volumio/lircd.conf"
-                        parts = line.split()
-                        if len(parts) >= 3:
-                            key = parts[2]
-                            current_mode = get_current_mode()
-                            print(f"IR event: {key} (mode: {current_mode})")
-                            process_key(key, current_mode)
-                else:
-                    time.sleep(0.1)
-            except BlockingIOError:
-                time.sleep(0.1)
+                repeat = int(repeat_hex, 16)
+            except ValueError:
+                repeat = 0
+            if repeat > 0:
+                continue
+
+            current_mode = get_current_mode()
+            process_key(key, current_mode)
     finally:
+        try:
+            f.close()
+        except Exception:
+            pass
         s.close()
 
 if __name__ == "__main__":
-    print("Starting IR listener...")
+    print("Starting IR listener…")
     ir_event_listener()

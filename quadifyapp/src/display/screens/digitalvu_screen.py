@@ -29,7 +29,7 @@ class DigitalVUScreen(BaseManager):
 
         # ---------------- Fonts ----------------
         try:
-            self.font_artist = self.display_manager.fonts.get("artist_font") or \
+            self.font_artist = self.display_manager.fonts.get("DVU_artist_font") or \
                 ImageFont.truetype(
                     os.path.join(self.display_manager.assets_base, "assets/fonts/OpenSans-Regular.ttf"), 10
                 )
@@ -38,7 +38,7 @@ class DigitalVUScreen(BaseManager):
             self.font_artist = ImageFont.load_default()
 
         try:
-            self.font_title = self.display_manager.fonts.get("song_font") or \
+            self.font_title = self.display_manager.fonts.get("DVU_song_font") or \
                 ImageFont.truetype(
                     os.path.join(self.display_manager.assets_base, "assets/fonts/OpenSans-Regular.ttf"), 14
                 )

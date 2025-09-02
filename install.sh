@@ -1,23 +1,48 @@
 #!/bin/sh
 # Quadify install script — first-install only (no cleanup), POSIX /bin/sh
-
 set -eu
 
-# -----------------------------
-# Basics
-# -----------------------------
 cd "$(dirname "$0")" || exit 1
-LOG_FILE="install.log"
-: > "$LOG_FILE"
-
+LOG_FILE="install.log"; : > "$LOG_FILE"
 log()  { echo "[Quadify Install] $*" | tee -a "$LOG_FILE"; }
 warn() { echo "[Quadify Install] WARN: $*" | tee -a "$LOG_FILE"; }
-
+run()  { echo "\$ $*" | tee -a "$LOG_FILE"; "$@" || { warn "Command failed: $*"; exit 1; }; }
 PLUGIN_DIR="$(pwd)"
 
-run() {
-  echo "\$ $*" | tee -a "$LOG_FILE"
-  "$@" || { warn "Command failed: $*"; exit 1; }
+# -----------------------------
+# LIRC: force raw /dev/lirc0 + install our remote
+# -----------------------------
+configure_lirc_raw() {
+  log "Configuring LIRC (raw /dev/lirc0)…"
+
+  LIRC_OPTIONS="/etc/lirc/lirc_options.conf"
+
+  # Write a clean options file (idempotent)
+  sudo tee "$LIRC_OPTIONS" >/dev/null <<'EOF'
+[lircd]
+nodaemon = False
+driver   = default
+device   = /dev/lirc0
+output   = /run/lirc/lircd
+EOF
+
+  # Install our known-good RAW remote as the main config
+  if [ -f "$PLUGIN_DIR/quadifyapp/lirc/lircd.conf" ]; then
+    run install -m 644 "$PLUGIN_DIR/quadifyapp/lirc/lircd.conf" /etc/lirc/lircd.conf
+  else
+    warn "Missing $PLUGIN_DIR/quadifyapp/lirc/lircd.conf — cannot install remote"
+  fi
+
+  # Disable any generic includes that can conflict (harmless if none exist)
+  run mkdir -p /etc/lirc/lircd.conf.d
+  run sh -c 'for f in /etc/lirc/lircd.conf.d/*.conf; do mv "$f" "$f.disabled"; done 2>/dev/null || true'
+
+  # Make sure the socket has relaxed perms for our listener
+  run systemctl restart lircd || true
+  # Quick sanity line in logs (optional)
+  journalctl -u lircd -n 20 --no-pager | egrep 'Initial device|Using remote|ready' || true
+
+  log "LIRC set to driver=default device=/dev/lirc0 and remote installed."
 }
 
 # -----------------------------
@@ -35,7 +60,13 @@ install_cava_from_fork() {
     libtool automake autoconf gcc make pkg-config libiniparser-dev
 
   run git clone "$REPO" "$BUILD"
-  ( cd "$BUILD" && run autoreconf -fi && run ./configure --prefix="$PREFIX" && run make && run make install )
+  (
+    cd "$BUILD"
+    run autoreconf -fi
+    run ./configure --prefix="$PREFIX"
+    run make
+    run make install
+  )
 
   run mkdir -p "$PREFIX/config"
   if [ -f "$BUILD/config/default_config" ]; then
@@ -53,19 +84,13 @@ install_cava_from_fork() {
 }
 
 # -----------------------------
-# MPD FIFO (template append, idempotent)
+# MPD FIFO (append once)
 # -----------------------------
 configure_mpd_fifo() {
   log "Configuring MPD FIFO…"
-
   MPD_TMPL="/volumio/app/plugins/music_service/mpd/mpd.conf.tmpl"
   START="# --- QUADIFY_CAVA_FIFO_START ---"
-
-  if [ ! -f "$MPD_TMPL" ]; then
-    warn "MPD template not found: $MPD_TMPL"
-    return 0
-  fi
-
+  if [ ! -f "$MPD_TMPL" ]; then warn "MPD template not found: $MPD_TMPL"; return 0; fi
   if ! grep -q "$START" "$MPD_TMPL"; then
     sudo tee -a "$MPD_TMPL" >/dev/null <<'EOF'
 
@@ -88,27 +113,23 @@ EOF
 # systemd helper
 # -----------------------------
 install_unit_from_template_or_simple() {
-  # install_unit_from_template_or_simple <svc> <desc> <workdir_rel_or_-> <exec>
+  # <svc> <desc> <workdir_rel_or_-> <exec>
   SVC="$1"; DESC="$2"; WORKDIR_REL="$3"; EXEC_CMD="$4"
   TEMPLATE="$PLUGIN_DIR/quadifyapp/service/$SVC"
   DST="/etc/systemd/system/$SVC"
-
   if [ -f "$TEMPLATE" ]; then
     log "Installing $SVC from template"
     run cp "$TEMPLATE" "$DST"
     run chmod 644 "$DST"
     return 0
   fi
-
   WDIR_LINE=""
   [ "$WORKDIR_REL" != "-" ] && WDIR_LINE="WorkingDirectory=$PLUGIN_DIR/$WORKDIR_REL"
-
   case "$EXEC_CMD" in
     /*) EXEC_LINE="$EXEC_CMD" ;;
     ./*) EXEC_LINE="$PLUGIN_DIR/${EXEC_CMD#./}" ;;
-    *)   EXEC_LINE="/usr/bin/env $EXEC_CMD" ;;
+    *) EXEC_LINE="/usr/bin/env $EXEC_CMD" ;;
   esac
-
   umask 022
   cat <<EOF | sudo tee "$DST" >/dev/null
 [Unit]
@@ -130,19 +151,20 @@ EOF
 }
 
 # -----------------------------
-# 1) APT: core packages
+# 1) APT: core packages (+ LIRC)
 # -----------------------------
 log "Installing system dependencies…"
 run apt-get update
 run apt-get install -y \
-  python3 python3-pip python3-venv \
+  python3 python3-pip python3-venv python3-dev \
   i2c-tools python3-smbus \
-  lsof \
+  lirc lsof \
   libjpeg-dev zlib1g-dev libfreetype6-dev \
   libgirepository1.0-dev libcairo2-dev libffi-dev build-essential \
   libxml2-dev libxslt1-dev libssl-dev \
   python3-gi python3-cairo gir1.2-gtk-3.0 \
-  pkg-config
+  pkg-config \
+  libopenjp2-7 libtiff5 liblcms2-dev libwebp-dev
 
 # -----------------------------
 # 2) Python deps
@@ -152,11 +174,15 @@ REQ_PATH=""
 [ -z "$REQ_PATH" ] && [ -f "$PLUGIN_DIR/requirements.txt" ] && REQ_PATH="$PLUGIN_DIR/requirements.txt"
 
 log "Upgrading pip/setuptools…"
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+export PIP_EXTRA_INDEX_URL="https://www.piwheels.org/simple"
+
 run python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel
 
 if [ -n "$REQ_PATH" ]; then
   log "Installing Python requirements from: $REQ_PATH"
-  run python3 -m pip install --no-cache-dir --upgrade --ignore-installed -r "$REQ_PATH"
+  run python3 -m pip install --no-cache-dir --prefer-binary cffi cairocffi
+  run python3 -m pip install --no-cache-dir --prefer-binary -r "$REQ_PATH"
 else
   warn "requirements.txt not found; skipping Python bulk install"
 fi
@@ -184,25 +210,66 @@ else
 fi
 
 # -----------------------------
-# 4) Enable I²C/SPI + IR overlay (no LIRC install)
+# 4) I²C/SPI overlays + IR overlay (GPIO 27)
 # -----------------------------
 log "Enabling I2C/SPI & IR overlays…"
+
 CONFIG_FILE="/boot/userconfig.txt"
 run touch "$CONFIG_FILE"
 
-# Keep these if your hardware needs them
-grep -qxF 'dtparam=spi=on' "$CONFIG_FILE"  || echo 'dtparam=spi=on'  | sudo tee -a "$CONFIG_FILE" >/dev/null
-grep -qxF 'dtparam=i2c_arm=on' "$CONFIG_FILE" || echo 'dtparam=i2c_arm=on' | sudo tee -a "$CONFIG_FILE" >/dev/null
+# helpers
+ensure_cfg() { grep -qxF "$1" "$CONFIG_FILE" || echo "$1" | sudo tee -a "$CONFIG_FILE" >/dev/null; }
 
-# This is the important one for the Volumio IR plugin (gpio 27)
-grep -qxF 'dtoverlay=gpio-ir,gpio_pin=27' "$CONFIG_FILE" || echo 'dtoverlay=gpio-ir,gpio_pin=27' | sudo tee -a "$CONFIG_FILE" >/dev/null
+ensure_cfg 'dtparam=spi=on'
+ensure_cfg 'dtparam=i2c_arm=on'
 
+# Keep only ONE gpio-ir line; update if it already exists
+if grep -q '^dtoverlay=gpio-ir' "$CONFIG_FILE"; then
+  run sed -i 's/^dtoverlay=gpio-ir.*/dtoverlay=gpio-ir,gpio_pin=27/' "$CONFIG_FILE"
+else
+  echo 'dtoverlay=gpio-ir,gpio_pin=27' | sudo tee -a "$CONFIG_FILE" >/dev/null
+fi
+
+# Load modules now (overlays still need a reboot to take effect)
 run modprobe i2c-dev || true
 run modprobe spi-bcm2835 || true
 
+# Auto-pick LIRC driver/device (prefers devinput, falls back to /dev/lirc0)
+configure_lirc_raw
 
 # -----------------------------
-# 5) systemd services
+# 5) LIRC post-step (kill irexec, blank lircrc, relax socket perms)
+# -----------------------------
+log "Configuring LIRC post-step…"
+run tee /usr/local/bin/quadify-blank-irexec.sh >/dev/null <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+pkill -x irexec 2>/dev/null || true
+echo "# Quadify empty" | tee /etc/lirc/irexec.lircrc >/dev/null
+[ -S /run/lirc/lircd ] && chmod 666 /run/lirc/lircd || true
+SH
+run chmod +x /usr/local/bin/quadify-blank-irexec.sh
+
+cat <<'UNIT' | sudo tee /etc/systemd/system/quadify-lirc-post.service >/dev/null
+[Unit]
+Description=Quadify LIRC post-setup (kill irexec, blank lircrc, chmod socket)
+After=lircd.service
+Wants=lircd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/quadify-blank-irexec.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+# Don’t fail if CLI isn’t present
+volumio plugin disable ir_controller 2>/dev/null || true
+
+# -----------------------------
+# 6) systemd services
 # -----------------------------
 log "Installing systemd services…"
 
@@ -213,10 +280,10 @@ install_unit_from_template_or_simple \
   "quadifyapp" \
   "/usr/bin/python3 $PLUGIN_DIR/quadifyapp/src/main.py"
 
-# quadify-ir-listener.service (if script exists)
+# ir-listener.service (if script exists)
 if [ -f "$PLUGIN_DIR/quadifyapp/src/hardware/ir_listener.py" ]; then
   install_unit_from_template_or_simple \
-    "quadify-ir-listener.service" \
+    "ir-listener.service" \
     "Quadify IR Listener" \
     "quadifyapp/src/hardware" \
     "/usr/bin/python3 $PLUGIN_DIR/quadifyapp/src/hardware/ir_listener.py"
@@ -231,20 +298,23 @@ if [ -f "$PLUGIN_DIR/quadifyapp/scripts/early_led8.py" ]; then
     "/usr/bin/python3 $PLUGIN_DIR/quadifyapp/scripts/early_led8.py"
 fi
 
-# cava.service — install unconditionally now (points to local-build path)
+# cava.service — install unconditionally (local-build path)
 install_unit_from_template_or_simple \
   "cava.service" \
   "CAVA Visualizer for Quadify" \
   "-" \
   "/data/plugins/system_hardware/quadify/cava/bin/cava -p /data/plugins/system_hardware/quadify/cava/config/default_config"
 
+# Enable services
 run systemctl daemon-reload
+run systemctl enable --now lircd.service || true
+run systemctl enable --now quadify-lirc-post.service || true
 run systemctl enable --now quadify.service || true
-[ -f /etc/systemd/system/quadify-ir-listener.service ] && run systemctl enable --now quadify-ir-listener.service || true
+[ -f /etc/systemd/system/ir-listener.service ] && run systemctl enable --now ir-listener.service || true
 [ -f /etc/systemd/system/early_led8.service ] && run systemctl enable early_led8.service || true
 
 # -----------------------------
-# 6) MPD FIFO + CAVA
+# 7) MPD FIFO + CAVA
 # -----------------------------
 configure_mpd_fifo
 
@@ -259,7 +329,7 @@ else
   run apt-get install -y cava
 fi
 
-# If fallback to system cava, point ExecStart to system binary
+# Point ExecStart to system cava if we fell back
 if [ "$FALLBACK" -eq 1 ]; then
   CAVA_SYS_BIN="$(command -v cava || true)"
   if [ -n "$CAVA_SYS_BIN" ]; then
@@ -272,14 +342,14 @@ run systemctl daemon-reload
 run systemctl enable --now cava.service || true
 
 # -----------------------------
-# 7) Permissions
+# 8) Permissions
 # -----------------------------
 log "Setting permissions on plugin folder…"
 run chown -R volumio:volumio "$PLUGIN_DIR"
 run chmod -R 755 "$PLUGIN_DIR"
 
 # -----------------------------
-# 8) Sanity ping
+# 9) Sanity ping
 # -----------------------------
 python3 - <<'PY' || true
 import importlib

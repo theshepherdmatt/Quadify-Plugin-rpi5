@@ -272,55 +272,62 @@ def main():
 
     # --------------------- IR command socket server ---------------------
 
-    def make_command_server(mode_manager: ModeManager):
+    def make_command_server(mode_manager: ModeManager, early: bool = False):
         """
-        Build a command server bound to /tmp/quadify.sock that uses the unified
-        handlers so streaming lists behave like library lists for IR.
+        Start a UNIX socket server at /tmp/quadify.sock.
+        In 'early' mode, the first real press (menu/select/ok/toggle) will stop
+        the ready loop AND exit this server so the main UI server can rebind.
         """
+        sock_path = "/tmp/quadify.sock"
 
         def server():
-            sock_path = "/tmp/quadify.sock"
+            # Clean up any stale socket file
             try:
-                os.remove(sock_path)
+                os.unlink(sock_path)
+            except FileNotFoundError:
+                pass
             except OSError:
                 pass
 
-            server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            server_socket.bind(sock_path)
-            server_socket.listen(1)
-            print(f"Quadify command server listening on {sock_path}")
+            srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            srv.bind(sock_path)
+            try:
+                os.chmod(sock_path, 0o666)  # let other processes (IR listener) connect
+            except Exception:
+                pass
+            srv.listen(5)
+            print(f"Quadify command server listening on {sock_path} (early={early})")
 
-            while True:
-                try:
-                    conn, _ = server_socket.accept()
+            try:
+                while True:
+                    conn, _ = srv.accept()
                     with conn:
                         data = conn.recv(1024)
                         if not data:
                             continue
+
                         command = data.decode("utf-8").strip()
                         print(f"Command received: {command}")
                         current_mode = mode_manager.get_mode()
 
-                        # Exit ready loop early on user commands
-                        if not ready_stop_event.is_set() and command in ("menu", "select", "ok", "toggle"):
-                            print("Exiting ready GIF due to remote control command.")
+                        # Early server: first real press kills this server so UI one can bind
+                        if early and not ready_stop_event.is_set() and command in ("menu", "select", "ok", "toggle"):
+                            print("Exiting ready GIF due to remote control command (early server).")
                             ready_stop_event.set()
-                            continue
+                            return  # <-- IMPORTANT: exit early server, frees the socket
 
                         if command == "home":
                             mode_manager.trigger("to_clock")
                         elif command == "shutdown":
-                            # Use the same path as the On/Off SHIM (systemd poweroff)
                             subprocess.run(["sudo", "/bin/systemctl", "poweroff", "--no-wall"], check=False)
 
                         elif command == "menu":
                             if current_mode == "clock":
                                 mode_manager.trigger("to_menu")
                         elif command == "toggle":
-                            # Toggle only makes sense on playback screens
                             mode_manager.toggle_play_pause()
                         elif command == "repeat":
-                            print("Repeat command received. (Implement as needed)")
+                            pass
 
                         elif command == "select":
                             handle_select(mode_manager)
@@ -344,18 +351,26 @@ def main():
                             volumio_listener.decrease_volume()
                         elif command == "back":
                             mode_manager.trigger("back")
-                        else:
-                            print(f"No mapping for command: {command}")
-
-                except Exception as e:
-                    print(f"Error in command server: {e}")
+            except Exception as e:
+                print(f"Error in command server: {e}")
+            finally:
+                try:
+                    srv.close()
+                except Exception:
+                    pass
+                # Ensure the path is freed for the next bind
+                try:
+                    os.unlink(sock_path)
+                except Exception:
+                    pass
 
         t = threading.Thread(target=server, daemon=True)
         t.start()
         return t
 
+
     # Start early command server with dummy manager (for ready exit + basic commands)
-    make_command_server(dummy_mode_manager)
+    make_command_server(dummy_mode_manager, early=True)
     print("Quadify command server thread (early) started.")
 
     # --- Loading GIF during boot ---
@@ -489,7 +504,7 @@ def main():
             mode_manager.trigger("to_menu")
 
     # Start the real command server bound to the real mode_manager
-    make_command_server(mode_manager)
+    make_command_server(mode_manager, early=False)
     print("Quadify command server thread (UI) started.")
 
     # --- Rotary handlers (use same unified handlers) ---

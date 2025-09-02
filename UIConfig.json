@@ -1,77 +1,93 @@
 {
-  "page": {
-    "label": "Quadify",
-    "icon": "fa-cube"
-  },
+  "page": { "label": "Quadify", "icon": "fa-cube" },
   "sections": [
     {
-      "id": "display_controls",
+      "id": "display_settings",
       "label": "Display",
       "element": "section",
       "icon": "fa-television",
+      "onSave": { "type": "controller", "endpoint": "system_hardware/quadify", "method": "saveDisplay_settings" },
       "content": [
+        { "id": "enableSpectrum", "element": "switch", "label": "Spectrum (visualiser) On/Off", "value": false },
         {
-          "id": "display_mode",
+          "id": "display_screen",
           "element": "select",
-          "label": "Playback screen",
-          "value": "modern",
+          "label": "Screen",
+          "value": "vu",
           "options": [
-            { "label": "Original", "value": "original" },
-            { "label": "Modern", "value": "modern" },
-            { "label": "Minimal", "value": "minimal" },
-            { "label": "VU Screen", "value": "vuscreen" },
-            { "label": "Digital VU", "value": "digitalvuscreen" }
+            { "label": "VU", "value": "vu" },
+            { "label": "Minimal", "value": "minimal" }
           ]
         },
         {
-          "id": "enableCava",
-          "element": "switch",
-          "label": "Enable CAVA visualizer",
-          "value": false
-        },
-        {
-          "id": "enableButtonsLED",
-          "element": "switch",
-          "label": "Enable Buttons / LEDs service",
-          "value": false
+          "id": "display_rotate",
+          "element": "select",
+          "label": "Rotate",
+          "value": "0",
+          "options": [
+            { "label": "0°", "value": "0" },
+            { "label": "90°", "value": "90" },
+            { "label": "180°", "value": "180" },
+            { "label": "270°", "value": "270" }
+          ]
         }
       ],
-      "saveButton": {
-        "label": "Save",
-        "data": [
-          "display_mode",
-          "enableCava",
-          "enableButtonsLED"
-        ]
-      }
+      "saveButton": { "label": "Save", "data": ["enableSpectrum", "display_screen", "display_rotate"] }
     },
     {
-      "id": "mcp23017_config",
-      "label": "Buttons/LEDs (MCP23017)",
+      "id": "buttons_leds",
+      "label": "Buttons & LEDs (MCP23017)",
       "element": "section",
-      "icon": "fa-microchip",
+      "icon": "fa-lightbulb-o",
+      "onSave": { "type": "controller", "endpoint": "system_hardware/quadify", "method": "saveButtons_leds" },
       "content": [
-        {
-          "id": "mcp23017_address",
-          "element": "input",
-          "type": "text",
-          "label": "I²C address (e.g. 0x20)",
-          "value": "0x20"
-        },
+        { "id": "enableButtonsLED", "element": "switch", "label": "Buttons & LEDs Service On/Off", "value": false },
+        { "id": "mcp23017_address", "element": "input", "type": "text", "label": "I²C address", "value": "0x20" },
         {
           "element": "button",
-          "label": "Auto-detect address",
+          "label": "Search / Auto-detect MCP23017",
           "onClick": {
-            "type": "controller",
-            "endpoint": "system_hardware/quadify",
-            "method": "autoDetectMCP"
+            "type": "emit",
+            "message": "callMethod",
+            "data": { "endpoint": "system_hardware/quadify", "method": "autoDetectMCP", "data": "" }
           }
         }
       ],
-      "saveButton": {
-        "label": "Save",
-        "data": ["mcp23017_address"]
-      }
+      "saveButton": { "label": "Save", "data": ["enableButtonsLED", "mcp23017_address"] }
+    },
+    {
+      "id": "ir_controller",
+      "label": "IR Controller",
+      "element": "section",
+      "icon": "fa-bullseye",
+      "onSave": { "type": "controller", "endpoint": "system_hardware/quadify", "method": "saveIr_controller" },
+      "content": [
+        { "id": "enableIR", "element": "switch", "label": "IR Controller On/Off", "value": false },
+        { "id": "ir_remote_profile", "element": "select", "label": "Remote profile", "value": "", "options": [] },
+        {
+          "element": "button",
+          "label": "Refresh remote list",
+          "onClick": {
+            "type": "emit",
+            "message": "callMethod",
+            "data": { "endpoint": "system_hardware/quadify", "method": "refreshIRRemotes", "data": "" }
+          }
+        },
+        { "id": "ir_gpio_pin", "element": "input", "type": "number", "label": "GPIO pin (BCM, default 27 = physical 13)", "value": 27 }
+      ],
+      "saveButton": { "label": "Save", "data": ["enableIR", "ir_remote_profile", "ir_gpio_pin"] }
+    },
+    {
+      "id": "safety_controls",
+      "label": "Safety",
+      "element": "section",
+      "icon": "fa-shield",
+      "onSave": { "type": "controller", "endpoint": "system_hardware/quadify", "method": "saveSafety_controls" },
+      "content": [
+        { "id": "safe_shutdown_enabled", "element": "switch", "label": "Safe shutdown button On/Off", "value": false },
+        { "id": "clean_mode_enabled", "element": "switch", "label": "Clean mode On/Off", "value": false }
+      ],
+      "saveButton": { "label": "Save", "data": ["safe_shutdown_enabled", "clean_mode_enabled"] }
     },
     {
       "id": "actions",
@@ -81,11 +97,38 @@
       "content": [
         {
           "element": "button",
+          "label": "Start Spectrum (CAVA)",
+          "onClick": {
+            "type": "emit",
+            "message": "callMethod",
+            "data": { "endpoint": "system_hardware/quadify", "method": "startCava", "data": "" }
+          }
+        },
+        {
+          "element": "button",
+          "label": "Stop Spectrum (CAVA)",
+          "onClick": {
+            "type": "emit",
+            "message": "callMethod",
+            "data": { "endpoint": "system_hardware/quadify", "method": "stopCava", "data": "" }
+          }
+        },
+        {
+          "element": "button",
+          "label": "Restart Spectrum (CAVA)",
+          "onClick": {
+            "type": "emit",
+            "message": "callMethod",
+            "data": { "endpoint": "system_hardware/quadify", "method": "restartCava", "data": "" }
+          }
+        },
+        {
+          "element": "button",
           "label": "Restart Quadify",
           "onClick": {
-            "type": "controller",
-            "endpoint": "system_hardware/quadify",
-            "method": "restartQuadify"
+            "type": "emit",
+            "message": "callMethod",
+            "data": { "endpoint": "system_hardware/quadify", "method": "restartQuadify", "data": "" }
           }
         }
       ]

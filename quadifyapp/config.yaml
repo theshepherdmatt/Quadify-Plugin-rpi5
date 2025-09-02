@@ -41,6 +41,14 @@ display:
     song_font:
       path: /data/plugins/system_hardware/quadify/quadifyapp/src/assets/fonts/OpenSans-Regular.ttf
       size: 14
+      
+    DVU_artist_font:
+      path: /data/plugins/system_hardware/quadify/quadifyapp/src/assets/fonts/OpenSans-Regular.ttf
+      size: 10
+    DVU_song_font:
+      path: /data/plugins/system_hardware/quadify/quadifyapp/src/assets/fonts/OpenSans-Regular.ttf
+      size: 12
+      
     data_font:
       path: /data/plugins/system_hardware/quadify/quadifyapp/src/assets/fonts/OpenSans-Regular.ttf
       size: 10
