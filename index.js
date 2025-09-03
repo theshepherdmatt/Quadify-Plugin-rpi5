@@ -279,46 +279,22 @@ ControllerQuadify.prototype.installIrProfile = async function (profileName) {
   const safe = path.basename(String(profileName || ''));
   if (!safe) throw new Error('Empty IR profile');
 
-  const base      = path.join(LIRC_PROFILES_DIR, safe);
-  const srcLircd  = path.join(base, 'lircd.conf');
-  const srcLircrc = path.join(base, 'lircrc');
+  const base     = path.join(__dirname, 'quadifyapp', 'src', 'lirc', 'configurations', safe);
+  const srcLircd = path.join(base, 'lircd.conf');
 
   if (!(await fs.pathExists(srcLircd))) {
-    throw new Error(`IR profile incomplete: ${safe} (missing lircd.conf)`);
+    throw new Error(`IR profile missing lircd.conf: ${safe}`);
   }
-  // lircrc is optional in your flow (ir_listener doesn’t use it), so don’t fail if missing
-  const hasLircrc = await fs.pathExists(srcLircrc);
 
-  async function doCopies(useSudo) {
-    if (useSudo) {
-      await pExec(`${SUDO} -n mkdir -p "${LIRC_DST_DIR}"`, this.logger).fail(() => libQ.resolve());
-      await pExec(`${SUDO} -n cp -f "${srcLircd}" "${LIRCD_CONF_DST}"`, this.logger);
-      if (hasLircrc) {
-        await pExec(`${SUDO} -n cp -f "${srcLircrc}" "${LIRCRC_DST}"`, this.logger).fail(() => libQ.resolve());
-      }
-      // Ensure the home symlink always exists and points to /etc version
-      await pExec(`${SUDO} -n ln -sf "${LIRCD_CONF_DST}" "/home/volumio/lircd.conf"`, this.logger).fail(() => libQ.resolve());
-    } else {
-      await fs.ensureDir(LIRC_DST_DIR);
-      await fs.copy(srcLircd, LIRCD_CONF_DST, { overwrite: true });
-      if (hasLircrc) {
-        await fs.copy(srcLircrc, LIRCRC_DST, { overwrite: true });
-      }
-      try {
-        await fs.unlink('/home/volumio/lircd.conf').catch(() => {});
-        await fs.symlink(LIRCD_CONF_DST, '/home/volumio/lircd.conf');
-      } catch (_) { /* non-fatal */ }
-    }
-  }
+  const dst = '/home/volumio/lircd.conf';
 
   try {
-    await doCopies.call(this, /*useSudo=*/false);
+    await fs.copy(srcLircd, dst, { overwrite: true });
+    this.logger.info(`[Quadify] Installed IR profile to ${dst}: ${safe}`);
   } catch (e) {
-    if (e.code !== 'EACCES' && !/permission denied/i.test(e.message || '')) throw e;
-    await doCopies.call(this, /*useSudo=*/true);
+    this.logger.error(`[Quadify] installIrProfile failed: ${e.message}`);
+    throw e;
   }
-
-  this.logger.info(`[Quadify] Installed IR profile: ${safe}`);
 };
 
 // ---------- Controller ----------
