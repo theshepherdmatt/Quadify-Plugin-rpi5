@@ -896,35 +896,5 @@ ControllerQuadify.prototype.applyAllServiceToggles = function () {
   ]);
 };
 
-// ---- Spectrum (CAVA) controls ----
-ControllerQuadify.prototype.startCava = function () {
-  const self = this;
-  return pExec('/usr/bin/sudo /bin/systemctl start cava.service', self.logger)
-    .then(() => self.commandRouter.pushToastMessage('success', 'Quadify', 'Spectrum started'))
-    .fail((e) => {
-      self.logger.error('[Quadify] startCava failed: ' + (e?.err?.message || e));
-      self.commandRouter.pushToastMessage('error', 'Quadify', 'Failed to start Spectrum');
-    });
-};
-
-ControllerQuadify.prototype.stopCava = function () {
-  const self = this;
-  return pExec('/usr/bin/sudo /bin/systemctl stop cava.service', self.logger)
-    .then(() => self.commandRouter.pushToastMessage('success', 'Quadify', 'Spectrum stopped'))
-    .fail((e) => {
-      self.logger.error('[Quadify] stopCava failed: ' + (e?.err?.message || e));
-      self.commandRouter.pushToastMessage('error', 'Quadify', 'Failed to stop Spectrum');
-    });
-};
-
-ControllerQuadify.prototype.restartCava = function () {
-  const self = this;
-  return pExec('/usr/bin/sudo /bin/systemctl restart cava.service', self.logger)
-    .then(() => self.commandRouter.pushToastMessage('success', 'Quadify', 'Spectrum restarted'))
-    .fail((e) => {
-      self.logger.error('[Quadify] restartCava failed: ' + (e?.err?.message || e));
-      self.commandRouter.pushToastMessage('error', 'Quadify', 'Failed to restart Spectrum');
-    });
-};
 
 module.exports = ControllerQuadify;
