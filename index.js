@@ -7,6 +7,11 @@ const path  = require('path');
 const exec  = require('child_process').exec;
 const Vconf = require('v-conf');
 
+// Resolve system binaries once (works on both /bin and /usr/bin layouts)
+const which = (cands) => cands.find(p => fs.existsSync(p)) || cands[cands.length - 1];
+const SYSTEMCTL = which(['/bin/systemctl', '/usr/bin/systemctl', 'systemctl']);
+const SUDO      = which(['/usr/bin/sudo', '/bin/sudo', 'sudo']);
+
 // ---------- Paths ----------
 const PLUGIN_ROOT = __dirname;
 const YAML_PATH   = path.join(PLUGIN_ROOT, 'quadifyapp', 'config.yaml');
@@ -25,6 +30,12 @@ const PREF_CANDIDATES = [
 
 // Buttons & LEDs service candidates
 const BUTTONSLEDS_UNIT_CANDIDATES = ['quadify-buttonsleds', 'buttonsleds'];
+
+// LIRC filesystem
+const LIRC_PROFILES_DIR = path.join(PLUGIN_ROOT, 'quadifyapp', 'lirc', 'configurations');
+const LIRC_DST_DIR      = '/etc/lirc';
+const LIRCD_CONF_DST    = path.join(LIRC_DST_DIR, 'lircd.conf');
+const LIRCRC_DST        = path.join(LIRC_DST_DIR, 'lircrc');
 
 // ---------- FS helpers ----------
 async function ensureDir(dir) {
@@ -91,18 +102,34 @@ function coerceHexAddr(a, fb = '0x20') {
 function screenToLegacy(screen, prevRaw = {}) {
   const s = String(screen || '').toLowerCase();
   const res = {};
+
   if (s.startsWith('modern-')) {
+    // modern-bars | modern-dots | modern-osci
+    let mode = s.slice('modern-'.length);
+    if (mode === 'osci') mode = 'scope';        // rename here
     res.display_mode = 'modern';
-    res.modern_spectrum_mode = s.replace('modern-', ''); // bars | dots | osci
+    res.modern_spectrum_mode = mode;            // bars | dots | scope
   } else if (s === 'modern') {
+    // Keep prior mode, but normalize osci->scope on write
+    let prev = (prevRaw.modern_spectrum_mode ?? '').toString().toLowerCase();
+    if (prev === 'osci') prev = 'scope';
     res.display_mode = 'modern';
-    // keep prior mode or blank
-    res.modern_spectrum_mode = (prevRaw.modern_spectrum_mode ?? '');
+    res.modern_spectrum_mode = prev || undefined;
   } else {
     res.display_mode = s || 'vu';
-    res.modern_spectrum_mode = undefined; // remove key for non-modern screens
+    res.modern_spectrum_mode = undefined;       // remove for non-modern screens
   }
   return res;
+}
+
+function friendlyErr(e) {
+  if (!e) return 'Unknown error';
+  if (typeof e === 'string') return e;
+  if (e.stderr && e.stderr.trim()) return e.stderr.trim();
+  if (e.stdout && e.stdout.trim()) return e.stdout.trim();
+  if (e.err && e.err.message) return e.err.message;
+  if (e.message) return e.message;
+  try { return JSON.stringify(e); } catch { return String(e); }
 }
 
 const LEGACY_FLAT_MAP_BASE = {
@@ -217,13 +244,82 @@ function applyPreferenceToVconfInstance(vconf, pref) {
 }
 
 // ---------- Misc helpers ----------
-function ensureIrOverlayGpio27() {
+function ensureIrOverlay(pinBcm) {
+  const wanted = `dtoverlay=gpio-ir,gpio_pin=${parseInt(pinBcm,10)||27}`;
   let content = '';
   try { content = fs.readFileSync(USERCONFIG_TXT, 'utf8'); } catch { content = ''; }
-  const lines = content.split('\n').filter(line => !/^dtoverlay=gpio-ir/.test(line));
-  lines.push(IR_OVERLAY_LINE);
+
+  // remove any existing gpio-ir overlay lines, then append desired
+  const lines = content.split('\n').filter(line => !/^dtoverlay=gpio-ir\b/.test(line));
+  lines.push(wanted);
   fs.writeFileSync(USERCONFIG_TXT, lines.filter(Boolean).join('\n') + '\n', 'utf8');
 }
+
+ControllerQuadify.prototype.listIrProfiles = async function () {
+  const opts = [];
+  let entries = [];
+  try {
+    entries = await fs.readdir(LIRC_PROFILES_DIR, { withFileTypes: true });
+  } catch {
+    return opts;
+  }
+  for (const d of entries) {
+    if (!d.isDirectory()) continue;
+    const base = path.join(LIRC_PROFILES_DIR, d.name);
+    const lircd = path.join(base, 'lircd.conf');
+    const lircrc = path.join(base, 'lircrc');
+    if (await fs.pathExists(lircd) && await fs.pathExists(lircrc)) {
+      opts.push({ label: d.name, value: d.name });
+    }
+  }
+  return opts.sort((a,b) => a.label.localeCompare(b.label, 'en'));
+};
+
+ControllerQuadify.prototype.installIrProfile = async function (profileName) {
+  const safe = path.basename(String(profileName || ''));
+  if (!safe) throw new Error('Empty IR profile');
+
+  const base      = path.join(LIRC_PROFILES_DIR, safe);
+  const srcLircd  = path.join(base, 'lircd.conf');
+  const srcLircrc = path.join(base, 'lircrc');
+
+  if (!(await fs.pathExists(srcLircd))) {
+    throw new Error(`IR profile incomplete: ${safe} (missing lircd.conf)`);
+  }
+  // lircrc is optional in your flow (ir_listener doesn’t use it), so don’t fail if missing
+  const hasLircrc = await fs.pathExists(srcLircrc);
+
+  async function doCopies(useSudo) {
+    if (useSudo) {
+      await pExec(`${SUDO} -n mkdir -p "${LIRC_DST_DIR}"`, this.logger).fail(() => libQ.resolve());
+      await pExec(`${SUDO} -n cp -f "${srcLircd}" "${LIRCD_CONF_DST}"`, this.logger);
+      if (hasLircrc) {
+        await pExec(`${SUDO} -n cp -f "${srcLircrc}" "${LIRCRC_DST}"`, this.logger).fail(() => libQ.resolve());
+      }
+      // Ensure the home symlink always exists and points to /etc version
+      await pExec(`${SUDO} -n ln -sf "${LIRCD_CONF_DST}" "/home/volumio/lircd.conf"`, this.logger).fail(() => libQ.resolve());
+    } else {
+      await fs.ensureDir(LIRC_DST_DIR);
+      await fs.copy(srcLircd, LIRCD_CONF_DST, { overwrite: true });
+      if (hasLircrc) {
+        await fs.copy(srcLircrc, LIRCRC_DST, { overwrite: true });
+      }
+      try {
+        await fs.unlink('/home/volumio/lircd.conf').catch(() => {});
+        await fs.symlink(LIRCD_CONF_DST, '/home/volumio/lircd.conf');
+      } catch (_) { /* non-fatal */ }
+    }
+  }
+
+  try {
+    await doCopies.call(this, /*useSudo=*/false);
+  } catch (e) {
+    if (e.code !== 'EACCES' && !/permission denied/i.test(e.message || '')) throw e;
+    await doCopies.call(this, /*useSudo=*/true);
+  }
+
+  this.logger.info(`[Quadify] Installed IR profile: ${safe}`);
+};
 
 // ---------- Controller ----------
 function ControllerQuadify(context) {
@@ -338,46 +434,61 @@ ControllerQuadify.prototype.getUIConfig = function () {
   const stringsEn  = path.join(__dirname, 'i18n', 'strings_en.json');
   const uiConfig   = path.join(__dirname, 'UIConfig.json');
 
-  const populate = (uiconf) => {
+  const populate = async (uiconf) => {
     const hwCfg = this.loadConfigYaml();
+    const pref  = await getCanonicalPreference(hwCfg);
 
-    return getCanonicalPreference(hwCfg).then(pref => {
-      const set = (sectionId, id, val) => {
-        const sec = uiconf.sections.find(s => s.id === sectionId);
-        if (!sec) return;
-        const row = sec.content.find(c => c.id === id);
-        if (row !== undefined) row.value = val;
-      };
+    const set = (sectionId, id, val) => {
+      const sec = uiconf.sections.find(s => s.id === sectionId);
+      if (!sec) return;
+      const row = sec.content.find(c => c.id === id);
+      if (row !== undefined) row.value = val;
+    };
 
-      // YAML truth for hardware
-      set('display_settings', 'display_rotate',        String(hwCfg.display_rotate ?? pref.display.rotate ?? '0'));
-      set('buttons_leds',    'mcp23017_address',       String(hwCfg.mcp23017_address || pref.controls.mcp23017_address || '0x20'));
-      set('ir_controller',   'ir_gpio_pin',            parseInt(hwCfg.ir_gpio_pin ?? pref.ir.gpio_bcm ?? 27, 10));
+    // YAML truth for hardware
+    set('display_settings', 'display_rotate',  String(hwCfg.display_rotate ?? pref.display.rotate ?? '0'));
+    set('buttons_leds',     'mcp23017_address', coerceHexAddr(hwCfg.mcp23017_address || pref.controls.mcp23017_address || '0x20'));
+    set('ir_controller',    'ir_gpio_pin',      parseInt(hwCfg.ir_gpio_pin ?? pref.ir.gpio_bcm ?? 27, 10));
 
-      // Preference truth for toggles/choices
-      set('display_settings', 'enableSpectrum',        !!pref.display.spectrum);
-      set('display_settings', 'display_screen',        String(pref.display.screen || 'vu'));
-      set('buttons_leds',     'enableButtonsLED',      !!pref.controls.buttons_led_service);
-      set('ir_controller',    'enableIR',              !!pref.ir.enabled);
-      set('ir_controller',    'ir_remote_profile',     String(pref.ir.profile || ''));
-      set('safety_controls',  'safe_shutdown_enabled', !!pref.safety.safe_shutdown);
-      set('safety_controls',  'clean_mode_enabled',    !!pref.safety.clean_mode);
+    // Preference truth for toggles/choices
+    set('display_settings', 'enableSpectrum',        !!pref.display.spectrum);
+    set('display_settings', 'display_screen',        String(pref.display.screen || 'vu'));
+    set('buttons_leds',     'enableButtonsLED',      !!pref.controls.buttons_led_service);
+    set('ir_controller',    'enableIR',              !!pref.ir.enabled);
+    set('ir_controller',    'ir_remote_profile',     String(pref.ir.profile || ''));
+    set('safety_controls',  'safe_shutdown_enabled', !!pref.safety.safe_shutdown);
+    set('safety_controls',  'clean_mode_enabled',    !!pref.safety.clean_mode);
 
-      // Legacy back-compat (optional)
-      const flatConfig = getFlatConfig(this.config.get() || {});
-      const legacyApply = (sectionId, keys) => {
-        const sec = uiconf.sections.find(s => s.id === sectionId);
-        if (!sec) return;
-        keys.forEach(k => {
-          const row = sec.content.find(c => c.id === k);
-          if (row && flatConfig[k] !== undefined) row.value = flatConfig[k];
-        });
-      };
-      legacyApply('display_controls', ['display_mode', 'enableCava', 'enableButtonsLED']);
-      legacyApply('mcp23017_config',  ['mcp23017_address']);
+    // ---- IR profile options (from filesystem)
+    const irSec = uiconf.sections.find(s => s.id === 'ir_controller');
+    if (irSec) {
+      const profileEl = irSec.content.find(c => c.id === 'ir_remote_profile');
+      if (profileEl) {
+        const opts = await this.listIrProfiles();
+        profileEl.options = [{ label: '— none —', value: '' }, ...opts];
 
-      return uiconf;
-    });
+        const stored = String(pref.ir.profile || '');
+        profileEl.value = opts.some(o => o.value === stored) ? stored : '';
+      }
+    }
+
+    // Legacy back-compat (optional)
+    const flatConfig = getFlatConfig(this.config.get() || {});
+    if (flatConfig.mcp23017_address !== undefined) {
+      flatConfig.mcp23017_address = coerceHexAddr(flatConfig.mcp23017_address);
+    }
+    const legacyApply = (sectionId, keys) => {
+      const sec = uiconf.sections.find(s => s.id === sectionId);
+      if (!sec) return;
+      keys.forEach(k => {
+        const row = sec.content.find(c => c.id === k);
+        if (row && flatConfig[k] !== undefined) row.value = flatConfig[k];
+      });
+    };
+    legacyApply('display_controls', ['display_mode', 'enableCava', 'enableButtonsLED']);
+    legacyApply('mcp23017_config',  ['mcp23017_address']);
+
+    return uiconf;
   };
 
   this.commandRouter.i18nJson(stringsLoc, stringsEn, uiConfig)
@@ -496,8 +607,8 @@ function pExec(cmd, logger) {
 
 ControllerQuadify.prototype.controlService = function (service, enable) {
   const logger     = this.logger;
-  const sudo       = '/usr/bin/sudo';
-  const systemctl  = '/bin/systemctl';
+  const sudo       = SUDO;
+  const systemctl  = SYSTEMCTL;
   const unit       = `${service}.service`;
 
   const safeExec = (cmd) =>
@@ -513,10 +624,11 @@ ControllerQuadify.prototype.controlService = function (service, enable) {
       return { active, enabled };
     });
 
-  const enableSeq       = [`${sudo} ${systemctl} daemon-reload`, `${sudo} ${systemctl} enable --now ${unit}`];
-  const enableFallback  = [`${sudo} ${systemctl} start ${unit}`];
-  const disableSeq      = [`${sudo} ${systemctl} disable --now ${unit}`];
-  const disableFallback = [`${sudo} ${systemctl} stop ${unit}`, `${sudo} ${systemctl} disable ${unit}`];
+  // Use sudo -n (non-interactive) so it fails fast if not allowed
+  const enableSeq       = [`${sudo} -n ${systemctl} daemon-reload`, `${sudo} -n ${systemctl} enable --now ${unit}`];
+  const enableFallback  = [`${sudo} -n ${systemctl} start ${unit}`];
+  const disableSeq      = [`${sudo} -n ${systemctl} disable --now ${unit}`];
+  const disableFallback = [`${sudo} -n ${systemctl} stop ${unit}`, `${sudo} -n ${systemctl} disable ${unit}`];
 
   const runSeq = (seq) => seq.reduce(
     (p, cmd) => p.then(() => pExec(cmd, logger).fail(() => libQ.resolve())),
@@ -545,12 +657,22 @@ ControllerQuadify.prototype.controlService = function (service, enable) {
     });
 };
 
+
 ControllerQuadify.prototype.controlButtonsLeds = function (enable) {
-  if (!this.buttonsLedsUnit) {
-    this.logger.warn('[Quadify] Skipping Buttons/LEDs toggle: no unit detected');
-    return libQ.resolve();
-  }
-  return this.controlService(this.buttonsLedsUnit, enable);
+  const self = this;
+  return libQ.resolve()
+    .then(() => {
+      if (!self.buttonsLedsUnit) {
+        return self.detectButtonsLedsUnit();
+      }
+    })
+    .then(() => {
+      if (!self.buttonsLedsUnit) {
+        self.logger.warn('[Quadify] Skipping Buttons/LEDs toggle: no unit detected');
+        return;
+      }
+      return self.controlService(self.buttonsLedsUnit, enable);
+    });
 };
 
 // ---------- MCP23017 / YAML ----------
@@ -658,10 +780,17 @@ ControllerQuadify.prototype.restartQuadify = function () {
 
 ControllerQuadify.prototype.updateRotaryConfig = function () { return libQ.resolve(); };
 
-ControllerQuadify.prototype.refreshIRRemotes = function () {
-  this.commandRouter.pushToastMessage('info', 'Quadify', 'Remote list refresh not implemented');
-  return libQ.resolve({});
+ControllerQuadify.prototype.refreshIRRemotes = async function () {
+  try {
+    const opts = await this.listIrProfiles();
+    this.commandRouter.pushToastMessage('success', 'Quadify', `Found ${opts.length} IR profiles. Reopen this page to see the list.`);
+  } catch (e) {
+    this.logger.warn('[Quadify] refreshIRRemotes failed: ' + e.message);
+    this.commandRouter.pushToastMessage('error', 'Quadify', 'Failed to refresh IR profiles');
+  }
+  return {};
 };
+
 
 // ---------- Section SAVE handlers ----------
 ControllerQuadify.prototype.saveDisplay_settings = function (data) {
@@ -716,7 +845,7 @@ ControllerQuadify.prototype.saveDisplay_settings = function (data) {
       ]);
     })
     .then(() => {
-      self.commandRouter.pushToastMessage('success', 'Quadify', 'Display settings saved');
+      self.commandRouter.pushToastMessage('success', 'Quadify', 'Display settings saved, please restart Quadify');
       return {};
     })
     .catch(err => {
@@ -729,34 +858,84 @@ ControllerQuadify.prototype.saveDisplay_settings = function (data) {
 ControllerQuadify.prototype.saveIr_controller = function (data) {
   const self = this;
   const flat = getFlatConfig(data || {});
+  self.logger.info('[Quadify] saveIr_controller flat: ' + JSON.stringify(flat));
   const cfg  = self.loadConfigYaml();
 
-  if (flat.ir_gpio_pin !== undefined) {
-    cfg.ir_gpio_pin = parseInt(flat.ir_gpio_pin, 10) || 27;
-    self.saveConfigYaml(cfg);
-    try { ensureIrOverlayGpio27(); } catch (e) { self.logger.warn('[Quadify] ensureIrOverlay failed: ' + e.message); }
+  // 1) Persist GPIO pin to YAML and ensure overlay
+  try {
+    if (flat.ir_gpio_pin !== undefined) {
+      cfg.ir_gpio_pin = parseInt(flat.ir_gpio_pin, 10) || 27;
+      self.saveConfigYaml(cfg);
+      try { ensureIrOverlay(cfg.ir_gpio_pin); }
+      catch (e) { self.logger.warn('[Quadify] ensureIrOverlay failed: ' + friendlyErr(e)); }
+    }
+  } catch (e) {
+    const msg = friendlyErr(e);
+    self.logger.error('[Quadify] Failed to write IR GPIO to YAML: ' + msg);
+    self.commandRouter.pushToastMessage('error', 'Quadify', 'Failed to save IR GPIO pin: ' + msg);
+    return libQ.resolve({});
   }
 
   const hwCfg = self.loadConfigYaml();
+
+  // 2) Build & persist preference; install profile if enabling
   return loadRawPreferenceJSON()
-    .then(raw => {
+    .then(async (raw) => {
       const pref = buildCanonicalFromAny(raw, hwCfg);
+
       if (flat.enableIR !== undefined)          pref.ir.enabled = logicValue(flat.enableIR);
       if (flat.ir_remote_profile !== undefined) pref.ir.profile = String(flat.ir_remote_profile || '');
+
+      // Install selected profile when enabling IR
+      if (pref.ir.enabled) {
+        if (!pref.ir.profile) throw new Error('IR enabled but no profile selected');
+        try {
+          await self.installIrProfile(pref.ir.profile); // should handle sudo internally
+        } catch (e) {
+          const msg = friendlyErr(e);
+          // Make common sudo error clearer
+          const friendly = /sudo|password|permission denied|EACCES/i.test(msg)
+            ? 'Permission denied writing /etc/lirc (sudo required).'
+            : msg;
+          throw new Error(friendly);
+        }
+      }
+
       const merged = withFlatMirrors(raw, pref);
-      return saveCanonicalPreference(merged).then(() => pref);
+      await saveCanonicalPreference(merged);
+      return pref;
     })
-    .then(pref => {
+    .then(async (pref) => {
+      // 3) Mirror to v-conf
       applyPreferenceToVconfInstance(self.config, pref);
       self.config.save();
-      self.commandRouter.pushToastMessage('success', 'Quadify', 'IR settings saved');
+
+      // 4) Toggle services to match desired state, but don’t fail the save if they error
+      const want = !!pref.ir.enabled;
+      const results = await libQ.allSettled([
+        self.controlService('lircd',       want),
+        self.controlService('ir_listener', want)
+      ]);
+
+      const fails = results.filter(r => r.state === 'rejected');
+      if (fails.length) {
+        const msgs = fails.map(f => friendlyErr(f.reason)).join(' | ');
+        self.logger.warn('[Quadify] IR service toggle issues: ' + msgs);
+        self.commandRouter.pushToastMessage('warning', 'Quadify', 'IR saved, but service toggle had issues: ' + msgs);
+      } else {
+        self.commandRouter.pushToastMessage('success', 'Quadify', 'IR settings saved');
+      }
+
       return {};
     })
-    .catch(err => { 
-      self.logger.error('[Quadify] saveIr_controller: ' + (err?.message || err)); 
-      return {}; 
+    .catch((err) => {
+      const msg = friendlyErr(err);
+      self.logger.error('[Quadify] saveIr_controller: ' + msg);
+      self.commandRouter.pushToastMessage('error', 'Quadify', `Failed to save IR settings: ${msg}`);
+      return {};
     });
 };
+
 
 ControllerQuadify.prototype.saveButtons_leds = function (data) {
   const self = this;
@@ -774,7 +953,9 @@ ControllerQuadify.prototype.saveButtons_leds = function (data) {
   return loadRawPreferenceJSON()
     .then(raw => {
       const pref = buildCanonicalFromAny(raw, hwCfg);
-      if (flat.enableButtonsLED !== undefined) pref.controls.buttons_led_service = logicValue(flat.enableButtonsLED);
+      if (flat.enableButtonsLED !== undefined) {
+        pref.controls.buttons_led_service = logicValue(flat.enableButtonsLED);
+      }
       const merged = withFlatMirrors(raw, pref);
       return saveCanonicalPreference(merged).then(() => pref);
     })
@@ -782,6 +963,12 @@ ControllerQuadify.prototype.saveButtons_leds = function (data) {
       applyPreferenceToVconfInstance(self.config, pref);
       self.config.save();
 
+      // NEW: ensure we know the exact unit name before toggling it
+      return libQ.resolve()
+        .then(() => (!self.buttonsLedsUnit ? self.detectButtonsLedsUnit() : null))
+        .then(() => pref);
+    })
+    .then(pref => {
       // Toggle services inline
       const spectrumOn = !!pref.display.spectrum;
       const buttonsOn  = !!pref.controls.buttons_led_service;
@@ -794,9 +981,9 @@ ControllerQuadify.prototype.saveButtons_leds = function (data) {
       self.commandRouter.pushToastMessage('success', 'Quadify', 'Buttons & LEDs saved');
       return {};
     })
-    .catch(err => { 
-      self.logger.error('[Quadify] saveButtons_leds: ' + (err?.message || err)); 
-      return {}; 
+    .catch(err => {
+      self.logger.error('[Quadify] saveButtons_leds: ' + (err?.message || err));
+      return {};
     });
 };
 
@@ -817,7 +1004,7 @@ ControllerQuadify.prototype.saveSafety_controls = function (data) {
     .then(pref => {
       applyPreferenceToVconfInstance(self.config, pref);
       self.config.save();
-      self.commandRouter.pushToastMessage('success', 'Quadify', 'Safety settings saved');
+      self.commandRouter.pushToastMessage('success', 'Quadify', 'Safety settings saved please restart Quadify');
       return {};
     })
     .catch(err => {
@@ -830,17 +1017,27 @@ ControllerQuadify.prototype.saveSafety_controls = function (data) {
 // ---------- Detect Buttons/LEDs unit ----------
 ControllerQuadify.prototype.detectButtonsLedsUnit = function () {
   const self = this;
-  const sudo = '/usr/bin/sudo';
-  const systemctl = '/bin/systemctl';
+  const systemctl = SYSTEMCTL; // uses the resolver you added
 
-  const tryOne = (name) =>
-    pExec(`${sudo} ${systemctl} status ${name}.service`, self.logger)
-      .then(() => name)
-      .fail(() => null); // kew promise here → keep .fail
+  const tryOne = (name) => {
+    const unit = `${name}.service`;
+    // show returns 0 even if disabled/inactive; LoadState tells us if it exists
+    return pExec(`${systemctl} show -p LoadState -p FragmentPath ${unit}`, self.logger)
+      .then(({ stdout }) => {
+        const lines = (stdout || '').split('\n').filter(Boolean);
+        const map = {};
+        lines.forEach(l => {
+          const i = l.indexOf('=');
+          if (i > -1) map[l.slice(0, i)] = l.slice(i + 1);
+        });
+        return map.LoadState === 'loaded' ? name : null;
+      })
+      .fail(() => null);
+  };
 
   let chain = libQ.resolve(null);
   BUTTONSLEDS_UNIT_CANDIDATES.forEach((name) => {
-    chain = chain.then((found) => (found ? found : tryOne(name)));
+    chain = chain.then(found => (found ? found : tryOne(name)));
   });
 
   return chain.then((found) => {
@@ -855,16 +1052,20 @@ ControllerQuadify.prototype.detectButtonsLedsUnit = function () {
   });
 };
 
+
 ControllerQuadify.prototype.applyAllServiceToggles = function () {
   const flatConfig = getFlatConfig(this.config.get() || {});
   const spectrumOn = logicValue(
     (flatConfig.enableSpectrum !== undefined ? flatConfig.enableSpectrum : flatConfig.enableCava)
   );
   const buttonsOn = logicValue(flatConfig.enableButtonsLED);
+  const irOn      = logicValue(flatConfig.enableIR);
 
-  return libQ.all([
+  return libQ.allSettled([
     this.controlService('cava', spectrumOn),
-    this.controlButtonsLeds(buttonsOn)
+    this.controlButtonsLeds(buttonsOn),
+    this.controlService('lircd', irOn),
+    this.controlService('ir_listener', irOn)
   ]);
 };
 

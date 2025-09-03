@@ -46,12 +46,11 @@
 
     {
       "id": "buttons_leds",
-      "label": "Buttons & LEDs (MCP23017)",
       "element": "section",
       "icon": "fa-lightbulb-o",
       "onSave": { "type": "controller", "endpoint": "system_hardware/quadify", "method": "saveButtons_leds" },
       "content": [
-        { "id": "enableButtonsLED", "element": "switch", "label": "Buttons & LEDs Service On/Off", "value": false },
+        { "id": "enableButtonsLED", "element": "switch", "label": "Buttons & LEDs Service On/Off", "value": true },
         { "id": "mcp23017_address", "element": "input", "type": "text", "label": "I²C address", "value": "0x20" },
         {
           "element": "button",

@@ -17,7 +17,7 @@ from PIL import Image, ImageSequence
 
 # UI / Hardware Imports
 from display.screens.clock import Clock
-from hardware.buttonsleds import ButtonsLEDController
+#from hardware.buttonsleds import ButtonsLEDController
 from hardware.shutdown_system import shutdown_system
 from display.screens.original_screen import OriginalScreen
 from display.screens.modern_screen import ModernScreen
@@ -100,8 +100,8 @@ def main():
     display_manager = DisplayManager(display_config)
 
     # --- LEDs controller ---
-    buttons_leds = ButtonsLEDController()
-    buttons_leds.start()
+    #buttons_leds = ButtonsLEDController()
+    #buttons_leds.start()
 
     # Convert / ensure menu icons exist
     convert_icons_main()
@@ -561,11 +561,11 @@ def main():
     except KeyboardInterrupt:
         logger.info("Shutting down Quadify via KeyboardInterrupt.")
     finally:
-        if 'buttons_leds' in locals() and buttons_leds:
-            try:
-                buttons_leds.stop()
-            except Exception as e:
-                logger.warning(f"Error stopping buttons_leds: {e}")
+        #if 'buttons_leds' in locals() and buttons_leds:
+            #try:
+                #buttons_leds.stop()
+            #except Exception as e:
+                #logger.warning(f"Error stopping buttons_leds: {e}")
 
         if 'rotary_control' in locals() and rotary_control:
             try:

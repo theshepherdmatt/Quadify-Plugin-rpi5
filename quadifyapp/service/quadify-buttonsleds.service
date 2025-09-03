@@ -1,0 +1,21 @@
+[Unit]
+Description=Quadify Buttons & LEDs
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+User=volumio
+Group=volumio
+WorkingDirectory=/data/plugins/system_hardware/quadify/quadifyapp/src
+Environment=PYTHONPATH=/data/plugins/system_hardware/quadify/quadifyapp/src
+Environment=QUADIFY_CONFIG_YAML=/data/plugins/system_hardware/quadify/quadifyapp/config.yaml
+ExecStart=/usr/bin/python3 /data/plugins/system_hardware/quadify/quadifyapp/src/scripts/buttonsleds_daemon.py
+Restart=always
+RestartSec=1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=quadify-buttonsleds
+
+[Install]
+WantedBy=multi-user.target
+

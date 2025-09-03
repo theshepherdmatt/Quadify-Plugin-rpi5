@@ -99,16 +99,24 @@ class ButtonsLEDController:
         self.button8_pending = False
 
 
+    # in ButtonsLEDController._load_config()
     def _load_config(self, cfg_path):
         path = Path(cfg_path)
         if path.is_file():
             try:
                 with open(path, "r") as f:
-                    data = yaml.safe_load(f)
-                    return data.get("mcp23017_address", DEFAULT_MCP23017_ADDRESS)
+                    data = yaml.safe_load(f) or {}
+                    val = data.get("mcp23017_address", DEFAULT_MCP23017_ADDRESS)
+                    # NEW: force to int
+                    if isinstance(val, str):
+                        val = int(val, 16) if val.lower().startswith("0x") else int(val)
+                    elif isinstance(val, bool):
+                        val = DEFAULT_MCP23017_ADDRESS
+                    return val
             except Exception as e:
                 self.logger.error(f"Error reading config: {e}")
         return DEFAULT_MCP23017_ADDRESS
+
 
     def _initialize_mcp23017(self):
         if not self.bus:
@@ -132,13 +140,17 @@ class ButtonsLEDController:
 
     def start(self):
         self.running = True
-        # Thread for reading button presses
         self.button_thread = threading.Thread(target=self._monitor_buttons_loop, name="ButtonMonitor")
         self.button_thread.start()
-
-        # Thread for checking volumio => sets PLAY or PAUSE LED
         self.volumio_monitor_thread = threading.Thread(target=self._monitor_volumio_loop, name="VolumioMonitor")
         self.volumio_monitor_thread.start()
+
+        # NEW: immediate LED state
+        try:
+            self.update_play_pause_led()
+        except Exception:
+            self.status_led_state = 0
+            self.control_leds()
 
         self.logger.info("ButtonsLEDController started.")
 
@@ -148,14 +160,9 @@ class ButtonsLEDController:
             self.button_thread.join()
         if self.volumio_monitor_thread and self.volumio_monitor_thread.is_alive():
             self.volumio_monitor_thread.join()
+        # Turn off the LEDs and put columns back to inactive
+        self.shutdown_leds()
         self.logger.info("ButtonsLEDController stopped.")
-        
-    def restart_cava_only(self):
-        subprocess.run(["sudo", "systemctl", "restart", "cava"], check=False)
-
-    def restart_quadify_only(self):
-        subprocess.run(["sudo", "systemctl", "restart", "quadify"], check=False)
-
 
     # -----------------------------------------------------------------
     # Monitoring Buttons
@@ -235,27 +242,30 @@ class ButtonsLEDController:
 
     def update_play_pause_led(self):
         try:
-            # 1) Run volumio status
-            res = subprocess.run(["volumio", "status"], capture_output=True, text=True)
-            if res.returncode == 0:
-                data = json.loads(res.stdout)
-                state = data.get("status", "").lower()
-                prev_led_state = self.status_led_state
+            res = subprocess.run(["volumio", "status"], capture_output=True, text=True, timeout=2)
+            s = (res.stdout or "").strip()
+            # Only try to parse if it looks like JSON
+            if not s or s[0] not in "[{":
+                return
+            data = json.loads(s)
 
-                if state == "play":
-                    self.status_led_state = LED.PLAY.value
-                elif state in ["pause", "stop"]:
-                    self.status_led_state = LED.PAUSE.value
-                else:
-                    self.status_led_state = 0
+            state = (data.get("status") or "").lower()
+            prev_led_state = self.status_led_state
 
-                # **Clear ephemeral LED if Volumio state has changed**
-                if self.current_button_led_state and self.status_led_state != prev_led_state:
-                    self.current_button_led_state = 0
+            if state == "play":
+                self.status_led_state = LED.PLAY.value
+            elif state in ("pause", "stop"):
+                self.status_led_state = LED.PAUSE.value
+            else:
+                self.status_led_state = 0
 
-                self.control_leds()
+            if self.current_button_led_state and self.status_led_state != prev_led_state:
+                self.current_button_led_state = 0
+
+            self.control_leds()
         except Exception as e:
-            self.logger.error(f"update_play_pause_led => {e}")
+            # keep it low-noise now that we guard for non-JSON
+            self.logger.debug(f"update_play_pause_led skipped: {e}")
 
 
     # -----------------------------------------------------------------

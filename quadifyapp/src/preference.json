@@ -8,5 +8,28 @@
   "screensaver_timeout": 3600,
   "oled_brightness": 255,
   "cava_enabled": true,
-  "modern_spectrum_mode": "dots"
+  "modern_spectrum_mode": "dots",
+
+  "display": {
+    "spectrum": true,
+    "screen": "digitalvuscreen",
+    "rotate": 0,
+    "oled_brightness": 255
+  },
+
+  "controls": {
+    "buttons_led_service": true,
+    "mcp23017_address": "0x20"
+  },
+  
+  "ir": {
+    "enabled": false,
+    "profile": "",
+    "gpio_bcm": 27
+  },
+  
+  "safety": {
+    "safe_shutdown": false,
+    "clean_mode": false
+  }
 }

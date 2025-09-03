@@ -116,6 +116,7 @@ install_unit_from_template_or_simple() {
   # <svc> <desc> <workdir_rel_or_-> <exec>
   SVC="$1"; DESC="$2"; WORKDIR_REL="$3"; EXEC_CMD="$4"
   TEMPLATE="$PLUGIN_DIR/quadifyapp/service/$SVC"
+  [ -f "$TEMPLATE" ] || TEMPLATE="$PLUGIN_DIR/quadifyapp/services/$SVC"
   DST="/etc/systemd/system/$SVC"
   if [ -f "$TEMPLATE" ]; then
     log "Installing $SVC from template"
@@ -280,6 +281,12 @@ install_unit_from_template_or_simple \
   "quadifyapp" \
   "/usr/bin/python3 $PLUGIN_DIR/quadifyapp/src/main.py"
 
+install_unit_from_template_or_simple \
+ "quadify-buttonsleds.service" \
+  "Quadify Buttons & LEDs" \
+  "-" \
+  "/usr/bin/python3 /data/plugins/system_hardware/quadify/quadifyapp/src/scripts/buttonsleds_daemon.py"
+
 # ir-listener.service (if script exists)
 if [ -f "$PLUGIN_DIR/quadifyapp/src/hardware/ir_listener.py" ]; then
   install_unit_from_template_or_simple \
@@ -310,6 +317,9 @@ run systemctl daemon-reload
 run systemctl enable --now lircd.service || true
 run systemctl enable --now quadify-lirc-post.service || true
 run systemctl enable --now quadify.service || true
+run systemctl disable --now quadify-buttonsleds.service || true
+run systemctl disable --now buttonsleds.service || true   # legacy, if present
+
 [ -f /etc/systemd/system/ir-listener.service ] && run systemctl enable --now ir-listener.service || true
 [ -f /etc/systemd/system/early_led8.service ] && run systemctl enable early_led8.service || true
 

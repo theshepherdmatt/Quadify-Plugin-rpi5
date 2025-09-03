@@ -115,7 +115,7 @@ display:
   refresh_rate: 60
   cache_images: true
 
-mcp23017_address: 32
+mcp23017_address: 
 
 logging:
   level: DEBUG
