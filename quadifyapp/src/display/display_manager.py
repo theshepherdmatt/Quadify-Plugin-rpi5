@@ -2,21 +2,21 @@ import logging
 import os
 import time
 import threading
+import yaml
 from PIL import Image, ImageDraw, ImageFont, ImageSequence
 from luma.core.interface.serial import spi
 from luma.oled.device import ssd1322
 
 
 class DisplayManager:
-    def __init__(self, config):
-        # SPI connection for SSD1322 (256x64), rotate=2 for your panel orientation
-        self.serial = spi(device=0, port=0)
-        self.oled = ssd1322(self.serial, width=256, height=64, rotate=2)
-        self.icons = {}
-        self.config = config or {}
-        self.lock = threading.Lock()
-
-        # Logger
+    def __init__(self, config=None, yaml_path=None, watch_yaml=False, watch_interval=2.0):
+        """
+        yaml_path: path to Quadify config.yaml. Defaults to
+                   /data/plugins/system_hardware/quadify/quadifyapp/config.yaml
+                   or env QUADIFY_CONFIG_YAML if set.
+        watch_yaml: if True, monitor the YAML file and hot-reload rotation.
+        """
+        # --- Logger ---
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(logging.INFO)
         if not self.logger.handlers:
@@ -25,14 +25,157 @@ class DisplayManager:
             ch.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
             self.logger.addHandler(ch)
 
-        self.logger.info("DisplayManager initialized.")
+        # --- Load YAML ---
+        self.yaml_path = yaml_path or os.environ.get(
+            "QUADIFY_CONFIG_YAML",
+            "/data/plugins/system_hardware/quadify/quadifyapp/config.yaml"
+        )
+        self._yaml_mtime = None
+        self.yaml_cfg = self._read_yaml(self.yaml_path)
 
-        # Fonts only (icons are owned by MenuManager)
+        # Keep runtime overrides separate so live YAML edits can apply
+        self._runtime_overrides = dict(config or {})
+
+        # Merge YAML + overrides (overrides win)
+        self.config = self._merge_config(self.yaml_cfg, self._runtime_overrides)
+
+        # --- Rotation (prefer top-level display_rotate, else display.rotation) ---
+        self.rotate = self._resolve_rotation(self.config)
+        self.logger.info(f"Using display_rotate={self.rotate} (quadrant) from {self.yaml_path}")
+
+        # SPI + device (SSD1322 @ 256x64)
+        self.serial = spi(device=0, port=0)
+        self.oled = ssd1322(self.serial, width=256, height=64, rotate=self.rotate)
+
+        self.icons = {}
+        self.lock = threading.Lock()
+
+        # Fonts (icons are owned by MenuManager)
         self.fonts = {}
         self._load_fonts()
 
         # Mode change callbacks
         self.on_mode_change_callbacks = []
+
+        # Optional YAML watcher
+        self._watch_stop = None
+        if watch_yaml:
+            self._watch_stop = threading.Event()
+            threading.Thread(target=self._watch_yaml_loop, args=(watch_interval,), daemon=True).start()
+
+        self.logger.info("DisplayManager initialized.")
+
+    # ---------- Config helpers ----------
+
+    def _merge_config(self, base, overlay):
+        """Shallow merge for top-level; nested 'display' merged one level deep."""
+        base = dict(base or {})
+        overlay = dict(overlay or {})
+
+        out = dict(base)
+        out.update({k: v for k, v in overlay.items() if k != "display"})
+
+        # Merge display.*
+        d_base = dict((base.get("display") or {}))
+        d_over = dict((overlay.get("display") or {}))
+        d_merged = dict(d_base)
+        d_merged.update(d_over)
+        if d_merged:
+            out["display"] = d_merged
+
+        return out
+
+    def _dget(self, key, default=None):
+        """
+        Resolve a key either at top-level or under display.* (display.* wins).
+        Useful for paths like logo_path, ready_loop_path, fonts, etc.
+        """
+        d = (self.config.get("display") or {}) if isinstance(self.config, dict) else {}
+        if key in d:
+            return d.get(key, default)
+        return (self.config.get(key, default) if isinstance(self.config, dict) else default)
+
+    # ---------- Rotation ----------
+
+    def _resolve_rotation(self, cfg):
+        """
+        Prefer 'display_rotate' (0..3 or 0/90/180/270), fallback to 'display.rotation'.
+        Return an int in {0,1,2,3} for luma.
+        """
+        raw = None
+        if isinstance(cfg, dict):
+            raw = cfg.get("display_rotate")
+            if raw is None:
+                raw = (cfg.get("display", {}) or {}).get("rotation")
+
+        def to_quadrant(v):
+            if v is None:
+                return 0
+            try:
+                n = int(str(v).strip())
+                # Accept quadrant directly
+                if n in (0, 1, 2, 3):
+                    return n
+                # Accept degrees too
+                if n in (0, 90, 180, 270):
+                    return (n // 90) % 4
+                return (n // 90) % 4
+            except Exception:
+                return 0
+
+        q = to_quadrant(raw)
+        self.logger.info(f"Display rotation config: raw={raw!r} -> quadrant={q}")
+        return q
+
+    # ---------- YAML helpers ----------
+
+    def _read_yaml(self, path):
+        try:
+            data = {}
+            if os.path.isfile(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+                self._yaml_mtime = os.path.getmtime(path)
+                self.logger.debug(f"Loaded YAML from {path}: {data}")
+            else:
+                self.logger.warning(f"YAML not found at {path}; using defaults.")
+            return data
+        except Exception as e:
+            self.logger.error(f"Failed reading YAML '{path}': {e}")
+            return {}
+
+    def _watch_yaml_loop(self, interval):
+        self.logger.info(f"Watching {self.yaml_path} for changes every {interval}s")
+        while not self._watch_stop.is_set():
+            try:
+                if os.path.isfile(self.yaml_path):
+                    mtime = os.path.getmtime(self.yaml_path)
+                    if self._yaml_mtime is None:
+                        self._yaml_mtime = mtime
+                    elif mtime != self._yaml_mtime:
+                        self._yaml_mtime = mtime
+                        self._on_yaml_changed()
+            except Exception as e:
+                self.logger.warning(f"YAML watch error: {e}")
+            time.sleep(interval)
+
+    def _on_yaml_changed(self):
+        self.logger.info(f"{self.yaml_path} changed; reloading…")
+        new_yaml = self._read_yaml(self.yaml_path)
+        # Replace YAML, re-merge overrides on top
+        self.yaml_cfg = new_yaml
+        self.config = self._merge_config(self.yaml_cfg, self._runtime_overrides)
+
+        # Recompute rotation and reinit device if changed
+        new_rotate = self._resolve_rotation(self.config)
+        if new_rotate != self.rotate:
+            self.logger.info(f"Applying new rotation: {self.rotate} → {new_rotate}")
+            self.rotate = new_rotate
+            with self.lock:
+                self.oled = ssd1322(self.serial, width=256, height=64, rotate=self.rotate)
+
+        # Reload fonts if display.fonts changed (optional but handy)
+        self._load_fonts()
 
     # ---------- Public helpers ----------
 
@@ -56,22 +199,25 @@ class DisplayManager:
     # ---------- Font loading ----------
 
     def _load_fonts(self):
-        fonts_config = (self.config or {}).get('fonts', {})
+        fonts_config = (self._dget('fonts') or {})
         default_font = ImageFont.load_default()
+        loaded = []
         for key, font_info in fonts_config.items():
-            path = font_info.get('path')
-            size = font_info.get('size', 12)
+            path = (font_info or {}).get('path')
+            size = (font_info or {}).get('size', 12)
             if path and os.path.isfile(path):
                 try:
                     self.fonts[key] = ImageFont.truetype(path, size=size)
-                    self.logger.info(f"Loaded font '{key}' from '{path}' size={size}.")
+                    loaded.append(key)
                 except IOError as e:
                     self.logger.error(f"Error loading font '{key}' from '{path}': {e}")
                     self.fonts[key] = default_font
             else:
-                self.logger.debug(f"Font '{key}' missing at '{path}', using default.")
                 self.fonts[key] = default_font
-        self.logger.info(f"Fonts loaded: {list(self.fonts.keys())}")
+        if loaded:
+            self.logger.info(f"Loaded fonts: {loaded}")
+        else:
+            self.logger.info("Loaded default fonts (no custom fonts found).")
 
     # ---------- Drawing primitives ----------
 
@@ -145,18 +291,16 @@ class DisplayManager:
 
             t0 = time.time()
             self.oled.display(base)
-            # Try to keep frame pacing roughly stable
             remaining = (duration / frames) - (time.time() - t0)
             if remaining > 0:
                 time.sleep(remaining)
-        # Let the menu take over
         if hasattr(menu, "display_menu"):
             menu.display_menu()
 
     # ---------- Splash / looped gfx ----------
 
     def show_logo(self, duration=5):
-        logo_path = self.config.get('logo_path')
+        logo_path = self._dget('logo_path')
         if not logo_path:
             self.logger.debug("No logo path configured.")
             return
@@ -181,7 +325,7 @@ class DisplayManager:
             time.sleep(duration)
 
     def show_ready_gif_until_event(self, stop_event):
-        path = self.config.get('ready_loop_path')  # was ready_gif_path
+        path = self._dget('ready_loop_path')
         if not path:
             self.logger.error("ready_loop_path not set in display config.")
             return
