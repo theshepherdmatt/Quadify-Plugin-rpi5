@@ -12,12 +12,11 @@ PLUGIN_DIR="$(pwd)"
 # -----------------------------
 # LIRC: force raw /dev/lirc0 + install our remote
 # -----------------------------
-configure_lirc_raw() {
-  log "Configuring LIRC (raw /dev/lirc0)…"
+configure_lirc_default() {
+  log "Configuring LIRC (default + /dev/lirc0)…"
 
   LIRC_OPTIONS="/etc/lirc/lirc_options.conf"
 
-  # Write a clean options file (idempotent)
   sudo tee "$LIRC_OPTIONS" >/dev/null <<'EOF'
 [lircd]
 nodaemon = False
@@ -26,23 +25,43 @@ device   = /dev/lirc0
 output   = /run/lirc/lircd
 EOF
 
-  # Install our known-good RAW remote as the main config
   if [ -f "$PLUGIN_DIR/quadifyapp/lirc/lircd.conf" ]; then
     run install -m 644 "$PLUGIN_DIR/quadifyapp/lirc/lircd.conf" /etc/lirc/lircd.conf
   else
     warn "Missing $PLUGIN_DIR/quadifyapp/lirc/lircd.conf — cannot install remote"
   fi
 
-  # Disable any generic includes that can conflict (harmless if none exist)
   run mkdir -p /etc/lirc/lircd.conf.d
   run sh -c 'for f in /etc/lirc/lircd.conf.d/*.conf; do mv "$f" "$f.disabled"; done 2>/dev/null || true'
 
-  # Make sure the socket has relaxed perms for our listener
   run systemctl restart lircd || true
-  # Quick sanity line in logs (optional)
-  journalctl -u lircd -n 20 --no-pager | egrep 'Initial device|Using remote|ready' || true
+  journalctl -u lircd -n 30 --no-pager | egrep 'Initial device|Options: driver|Using remote|ready' || true
 
   log "LIRC set to driver=default device=/dev/lirc0 and remote installed."
+}
+
+ensure_lirc_symlink() {
+  log "Ensuring /home/volumio/lircd.conf → /etc/lirc/lircd.conf"
+  run install -d -m 755 /etc/lirc
+  # If you shipped a default profile, put it in place once:
+  if [ -f "$PLUGIN_DIR/quadifyapp/lirc/lircd.conf" ]; then
+    run install -m 644 "$PLUGIN_DIR/quadifyapp/lirc/lircd.conf" /etc/lirc/lircd.conf
+  fi
+  # Point home file to /etc version (this is what lircd logs as 'Using remote:')
+  sudo ln -sf /etc/lirc/lircd.conf /home/volumio/lircd.conf
+  sudo chown volumio:volumio /home/volumio/lircd.conf || true
+}
+
+
+write_sudoers() {
+  log "Installing sudoers drop-in for Quadify…"
+  SUDOERS="/etc/sudoers.d/quadify-lirc"
+  # Allow volumio to run these without a password (exactly what index.js uses)
+  sudo tee "$SUDOERS" >/dev/null <<'EOF'
+volumio ALL=(ALL) NOPASSWD: /bin/systemctl, /usr/bin/systemctl, /bin/mkdir, /usr/bin/mkdir, /bin/cp, /usr/bin/cp, /bin/ln, /usr/bin/ln
+EOF
+  sudo chmod 0440 "$SUDOERS"
+  sudo visudo -cf "$SUDOERS" >/dev/null
 }
 
 # -----------------------------
@@ -236,7 +255,7 @@ run modprobe i2c-dev || true
 run modprobe spi-bcm2835 || true
 
 # Auto-pick LIRC driver/device (prefers devinput, falls back to /dev/lirc0)
-configure_lirc_raw
+configure_lirc_default
 
 # -----------------------------
 # 5) LIRC post-step (kill irexec, blank lircrc, relax socket perms)
@@ -322,6 +341,8 @@ run systemctl disable --now buttonsleds.service || true   # legacy, if present
 
 [ -f /etc/systemd/system/ir-listener.service ] && run systemctl enable --now ir-listener.service || true
 [ -f /etc/systemd/system/early_led8.service ] && run systemctl enable early_led8.service || true
+
+write_sudoers
 
 # -----------------------------
 # 7) MPD FIFO + CAVA
