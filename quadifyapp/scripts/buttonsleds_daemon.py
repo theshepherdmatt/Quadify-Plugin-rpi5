@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 import os, sys, time, signal, logging
+from pathlib import Path
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-SRC_ROOT = os.path.abspath(os.path.join(HERE, ".."))
-if SRC_ROOT not in sys.path:
-    sys.path.insert(0, SRC_ROOT)
+HERE = Path(__file__).resolve()
+ROOT = HERE.parent.parent                     # …/quadifyapp
+SRC  = ROOT / "src"                           # …/quadifyapp/src
+
+# Ensure the 'src' directory (which contains 'hardware/') is importable
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 from hardware.buttonsleds import ButtonsLEDController
 

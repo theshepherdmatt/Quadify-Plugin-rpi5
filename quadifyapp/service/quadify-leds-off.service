@@ -1,0 +1,13 @@
+[Unit]
+Description=Turn off MCP23017 LEDs before poweroff
+DefaultDependencies=no
+Before=poweroff.target halt.target shutdown.target
+After=quadify.service early_led8.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/bin/quadify-leds-off.py
+TimeoutStartSec=3
+
+[Install]
+WantedBy=poweroff.target halt.target shutdown.target

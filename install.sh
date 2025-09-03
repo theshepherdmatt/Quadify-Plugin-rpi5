@@ -9,6 +9,14 @@ warn() { echo "[Quadify Install] WARN: $*" | tee -a "$LOG_FILE"; }
 run()  { echo "\$ $*" | tee -a "$LOG_FILE"; "$@" || { warn "Command failed: $*"; exit 1; }; }
 PLUGIN_DIR="$(pwd)"
 
+# --- APT non-interactive + dpkg heal ---
+export DEBIAN_FRONTEND=noninteractive
+APT_OPTS='-y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold'
+
+# If a previous run left dpkg half-configured (like lirc), heal it first
+sudo dpkg --configure -a || true
+sudo apt-get -f $APT_OPTS install || true
+
 # -----------------------------
 # LIRC: force raw /dev/lirc0 + install our remote
 # -----------------------------
@@ -173,9 +181,15 @@ EOF
 # -----------------------------
 # 1) APT: core packages (+ LIRC)
 # -----------------------------
+
+if [ -f /etc/lirc/irexec.lircrc ]; then
+  sudo cp -a /etc/lirc/irexec.lircrc /etc/lirc/irexec.lircrc.quadify.bak || true
+  sudo rm -f /etc/lirc/irexec.lircrc
+fi
+
 log "Installing system dependencies…"
 run apt-get update
-run apt-get install -y \
+run apt-get $APT_OPTS install \
   python3 python3-pip python3-venv python3-dev \
   i2c-tools python3-smbus \
   lirc lsof \
@@ -256,6 +270,7 @@ run modprobe spi-bcm2835 || true
 
 # Auto-pick LIRC driver/device (prefers devinput, falls back to /dev/lirc0)
 configure_lirc_default
+ensure_lirc_symlink
 
 # -----------------------------
 # 5) LIRC post-step (kill irexec, blank lircrc, relax socket perms)
@@ -286,7 +301,80 @@ WantedBy=multi-user.target
 UNIT
 
 # Don’t fail if CLI isn’t present
-volumio plugin disable ir_controller 2>/dev/null || true
+volumio plugin disable ir_controller >/dev/null 2>&1 || true
+
+# ============================
+# On/Off SHIM overlays (kernel)
+# ============================
+configure_onoff_shim_overlays() {
+  log "Configuring kernel overlays for On/Off SHIM…"
+
+  # ensure userconfig is included
+  if ! grep -q '^include userconfig.txt' /boot/config.txt 2>/dev/null; then
+    echo 'include userconfig.txt' | sudo tee -a /boot/config.txt >/dev/null
+  fi
+
+  UCFG="/boot/userconfig.txt"
+  run touch "$UCFG"
+
+  grep -q '^dtparam=i2c_arm=on' "$UCFG" || echo 'dtparam=i2c_arm=on' | sudo tee -a "$UCFG" >/dev/null
+  grep -q '^dtoverlay=gpio-shutdown' "$UCFG" || \
+    echo 'dtoverlay=gpio-shutdown,gpio_pin=17,active_low=1,gpio_pull=up' | sudo tee -a "$UCFG" >/dev/null
+  grep -q '^dtoverlay=gpio-poweroff' "$UCFG" || \
+    echo 'dtoverlay=gpio-poweroff,gpiopin=4,active_low=1' | sudo tee -a "$UCFG" >/dev/null
+
+  log "On/Off SHIM overlays ensured (BCM17 shutdown, BCM4 poweroff). Reboot required to take effect."
+}
+
+# =========================================
+# Shutdown helpers (copy scripts + units)
+# =========================================
+install_shutdown_assets() {
+  log "Installing LED-off and clean-poweroff assets…"
+
+  # Source files in your repo
+  SRC_LED_OFF="$PLUGIN_DIR/quadifyapp/scripts/quadify-leds-off.py"
+  SRC_CLEAN_PO="$PLUGIN_DIR/quadifyapp/scripts/clean-poweroff.sh"
+  SRC_UNIT_LED="$PLUGIN_DIR/quadifyapp/service/quadify-leds-off.service"
+  SRC_UNIT_CPO="$PLUGIN_DIR/quadifyapp/service/volumio-clean-poweroff.service"  # repo name
+
+  # Destinations on the system
+  DST_LED_OFF="/usr/local/bin/quadify-leds-off.py"
+  DST_CLEAN_PO="/usr/local/bin/clean-poweroff.sh"
+  DST_UNIT_LED="/etc/systemd/system/quadify-leds-off.service"
+  DST_UNIT_CPO="/etc/systemd/system/clean-poweroff.service"  # install under final name
+
+  # Verify sources exist
+  for f in "$SRC_LED_OFF" "$SRC_CLEAN_PO" "$SRC_UNIT_LED" "$SRC_UNIT_CPO"; do
+    [ -f "$f" ] || { warn "Missing $f"; exit 1; }
+  done
+
+  # Copy scripts
+  run install -m 755 "$SRC_LED_OFF" "$DST_LED_OFF"
+  run install -m 755 "$SRC_CLEAN_PO" "$DST_CLEAN_PO"
+
+  # Copy units (644)
+  run install -m 644 "$SRC_UNIT_LED" "$DST_UNIT_LED"
+  run install -m 644 "$SRC_UNIT_CPO" "$DST_UNIT_CPO"
+
+  # Default env (UI may override later)
+  run install -d -m 755 /etc/quadify
+  sudo tee /etc/quadify/clean-poweroff.env >/dev/null <<'ENV'
+# Written by Quadify (edit if needed)
+SERVICES="quadify early_led8 ir_listener cava"
+PRE_HOOK=""
+POST_HOOK=""
+STOP_VOL="1"
+ENV
+
+  # Enable
+  run systemctl daemon-reload
+  run systemctl enable quadify-leds-off.service
+  run systemctl enable clean-poweroff.service
+
+  log "Shutdown helpers installed & enabled."
+}
+
 
 # -----------------------------
 # 6) systemd services
@@ -337,7 +425,7 @@ run systemctl enable --now lircd.service || true
 run systemctl enable --now quadify-lirc-post.service || true
 run systemctl enable --now quadify.service || true
 run systemctl disable --now quadify-buttonsleds.service || true
-run systemctl disable --now buttonsleds.service || true   # legacy, if present
+systemctl disable --now buttonsleds.service >/dev/null 2>&1 || true
 
 [ -f /etc/systemd/system/ir-listener.service ] && run systemctl enable --now ir-listener.service || true
 [ -f /etc/systemd/system/early_led8.service ] && run systemctl enable early_led8.service || true

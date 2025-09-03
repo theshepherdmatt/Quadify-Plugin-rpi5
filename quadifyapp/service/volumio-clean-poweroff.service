@@ -1,0 +1,13 @@
+[Unit]
+Description=Cleanly stop Quadify/CAVA/Volumio before poweroff
+DefaultDependencies=no
+Before=poweroff.target halt.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/clean-poweroff.sh
+TimeoutStartSec=15
+
+[Install]
+WantedBy=poweroff.target halt.target shutdown.target
