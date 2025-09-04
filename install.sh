@@ -435,31 +435,24 @@ systemctl disable --now buttonsleds.service >/dev/null 2>&1 || true
 write_sudoers
 
 # -----------------------------
-# 7) MPD FIFO + CAVA
+# 7) MPD FIFO + CAVA (from fork)
 # -----------------------------
+install_cava_from_fork
 configure_mpd_fifo
 
-log "Installing CAVA from repo (skipping local build)…"
-FALLBACK=1
-run apt-get update
-if apt-get install -y cava; then
-  log "System CAVA installed."
-else
-  warn "System CAVA not available; continuing without it."
-fi
-
-
-# Point ExecStart to system cava if we fell back
-if [ "$FALLBACK" -eq 1 ]; then
-  CAVA_SYS_BIN="$(command -v cava || true)"
-  if [ -n "$CAVA_SYS_BIN" ]; then
-    sudo sed -i "s|^ExecStart=.*|ExecStart=$CAVA_SYS_BIN -p /data/plugins/system_hardware/quadify/cava/config/default_config|" \
-      /etc/systemd/system/cava.service || true
-  fi
-fi
+# Pin ExecStart to plugin-local cava binary
+sudo sed -i "s|^ExecStart=.*|ExecStart=$PLUGIN_DIR/cava/bin/cava -p $PLUGIN_DIR/cava/config/default_config|" \
+  /etc/systemd/system/cava.service || true
 
 run systemctl daemon-reload
-run systemctl enable --now cava.service || true
+
+# Enable only (do NOT start during install)
+if [ -x "$PLUGIN_DIR/cava/bin/cava" ]; then
+  run systemctl enable cava.service
+else
+  warn "CAVA binary missing ($PLUGIN_DIR/cava/bin/cava). Leaving service disabled."
+  systemctl disable cava.service >/dev/null 2>&1 || true
+fi
 
 # -----------------------------
 # 8) Permissions
