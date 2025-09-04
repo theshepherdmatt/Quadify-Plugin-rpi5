@@ -30,10 +30,10 @@ def main():
         while not stopping:
             time.sleep(0.5)
     finally:
-        try: ctl.shutdown_leds()
-        except Exception: pass
+        # Do NOT kill LEDs on service stop/restart; the shutdown unit handles that.
         try: ctl.stop()
-        except Exception: pass
+        except Exception:
+            pass
         LOG.info("Buttons/LEDs daemon exiting.")
 
 if __name__ == "__main__":

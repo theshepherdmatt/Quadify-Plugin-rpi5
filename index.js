@@ -29,7 +29,7 @@ const PREF_CANDIDATES = [
 ];
 
 // Buttons & LEDs service candidates
-const BUTTONSLEDS_UNIT_CANDIDATES = ['quadify-buttonsleds', 'buttonsleds'];
+const BUTTONSLEDS_UNIT_CANDIDATES = ['quadify-buttonsleds'];
 
 // Safe-shutdown units we manage
 const SAFE_SHUTDOWN_UNIT_CANDIDATES = ['clean-poweroff', 'volumio-clean-poweroff']; // support old/new names
@@ -301,6 +301,13 @@ ControllerQuadify.prototype.installIrProfile = async function (profileName) {
   }
 };
 
+ControllerQuadify.prototype.enableOnly = function (service, enable) {
+  const systemctl = SYSTEMCTL;
+  const cmd = enable ? `${systemctl} enable ${service}.service`
+                     : `${systemctl} disable ${service}.service`;
+  return pExec(cmd, this.logger).fail(() => libQ.resolve());
+};
+
 // ---------- Controller ----------
 function ControllerQuadify(context) {
   this.context       = context;
@@ -330,6 +337,7 @@ ControllerQuadify.prototype.onVolumioStart = function () {
   (async () => {
     this.logger.info('[Quadify] onVolumioStart – ensure config');
 
+    // Ensure Volumio v-conf file exists
     try {
       fs.ensureDirSync(CONFIG_DIR);
       if (!fs.existsSync(CONFIG_PATH)) fs.writeJsonSync(CONFIG_PATH, {}, { spaces: 2 });
@@ -337,9 +345,11 @@ ControllerQuadify.prototype.onVolumioStart = function () {
       this.logger.error('[Quadify] ensure config dir/file failed: ' + e.message);
     }
 
+    // Load v-conf
     try { this.config.loadFile(CONFIG_PATH); }
     catch (e) { this.logger.warn('[Quadify] loadFile failed, starting fresh: ' + e.message); }
 
+    // Seed defaults into v-conf if missing
     const defaults = {
       enableCava: true,
       enableButtonsLED: true,
@@ -358,9 +368,8 @@ ControllerQuadify.prototype.onVolumioStart = function () {
       enableIR: true,
       ir_remote_profile: '',
       ir_gpio_pin: 27,
-      safe_shutdown_enabled: true,
+      safe_shutdown_enabled: true
     };
-
     let changed = false;
     Object.keys(defaults).forEach(k => {
       if (this.config.get(k) === undefined) {
@@ -368,29 +377,38 @@ ControllerQuadify.prototype.onVolumioStart = function () {
         changed = true;
       }
     });
-    if (changed) { this.logger.info('[Quadify] writing default config.json'); this.config.save(); }
+    if (changed) {
+      this.logger.info('[Quadify] writing default config.json');
+      this.config.save();
+    }
 
-    // Preference import/migration BEFORE returning
+    // Preference import/migration
     const hwCfg = this.loadConfigYaml();
     try {
-      const raw       = await loadRawPreferenceJSON();
-      const canonical = buildCanonicalFromAny(raw, hwCfg);
-      const merged    = withFlatMirrors(raw, canonical);
+      const raw       = await loadRawPreferenceJSON();          // safe loader (handles empty/corrupt → {})
+      const canonical = buildCanonicalFromAny(raw, hwCfg);      // nested canonical {display,controls,…}
+      const merged    = withFlatMirrors(raw, canonical);        // add flat mirrors for legacy
 
+      // Persist canonical+mirrors back to preference.json (atomic in your helper)
       await saveCanonicalPreference(merged);
 
-      // Mirror canonical → v-conf (sets enableSpectrum AND enableCava)
+      // Mirror canonical → v-conf so UI is pre-populated correctly
       applyPreferenceToVconfInstance(this.config, canonical);
       this.config.save();
 
-      // Resolve Buttons/LEDs unit, then apply service toggles
+      // --- BUTTONS & LEDs ONLY: enforce systemd state from preference.json ---
       await this.detectButtonsLedsUnit();
-      await this.applyAllServiceToggles();
+      const wantButtons = !!( (await getCanonicalPreference(this.loadConfigYaml()))
+        .controls?.buttons_led_service );
+      await this.controlButtonsLeds(wantButtons);
+      this.logger.info(`[Quadify] Buttons/LEDs enforced at boot → ${wantButtons ? 'ON' : 'OFF'}`);
+      // ----------------------------------------------------------------------
+
     } catch (e) {
       this.logger.warn('[Quadify] pref migrate/import on boot: ' + e.message);
     }
 
-    // Optional: sync hook (kept as no-op)
+    // Optional: hook
     try { await this.syncPreferenceToQuadify(); }
     catch (e) { this.logger.warn('[Quadify] pref sync on start: ' + e.message); }
 
@@ -399,6 +417,7 @@ ControllerQuadify.prototype.onVolumioStart = function () {
 
   return defer.promise;
 };
+
 
 ControllerQuadify.prototype.syncPreferenceToQuadify = function () {
   return libQ.resolve();
@@ -652,19 +671,31 @@ ControllerQuadify.prototype.controlButtonsLeds = function (enable) {
     });
 };
 
+ControllerQuadify.prototype.enforceButtonsFromPreference = async function () {
+  try {
+    const hwCfg = this.loadConfigYaml();
+    const pref  = await getCanonicalPreference(hwCfg);
+    const want  = !!pref.controls?.buttons_led_service;
+
+    await this.detectButtonsLedsUnit();
+    await this.controlButtonsLeds(want);
+
+    this.logger.info(`[Quadify] Buttons/LEDs boot enforce → ${want ? 'ON' : 'OFF'}`);
+  } catch (e) {
+    this.logger.warn('[Quadify] enforceButtonsFromPreference failed: ' + (e?.message || e));
+  }
+};
+
+
 ControllerQuadify.prototype.controlSafeShutdown = function (enable) {
-  // Toggle both the “clean poweroff” unit (old/new names) and the LEDs-off unit
-  const jobs = [
-    this.controlService(LEDSOFF_UNIT, enable),
-    ...SAFE_SHUTDOWN_UNIT_CANDIDATES.map(u => this.controlService(u, enable))
-  ];
-  return libQ.allSettled(jobs).then(results => {
-    const failures = results.filter(r => r.state === 'rejected');
-    if (failures.length) {
-      this.logger.warn('[Quadify] Some safe-shutdown units failed to toggle.');
-    }
-    return results;
-  });
+  // LEDs-off must run only at shutdown, never at boot.
+  return libQ.allSettled([
+    this.enableOnly('quadify-leds-off', enable),
+
+    // Button SHIM: enable it; OK to start/stop this one during runtime
+    this.controlService('clean-poweroff', enable),
+    this.controlService('volumio-clean-poweroff', enable) // harmless if missing
+  ]);
 };
 
 // ---------- MCP23017 / YAML ----------
