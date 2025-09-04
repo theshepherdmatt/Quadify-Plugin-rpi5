@@ -283,7 +283,7 @@ ControllerQuadify.prototype.installIrProfile = async function (profileName) {
   const safe = path.basename(String(profileName || ''));
   if (!safe) throw new Error('Empty IR profile');
 
-  const base     = path.join(__dirname, 'quadifyapp', 'src', 'lirc', 'configurations', safe);
+  const base     = path.join(__dirname, 'quadifyapp', 'lirc', 'configurations', safe);
   const srcLircd = path.join(base, 'lircd.conf');
 
   if (!(await fs.pathExists(srcLircd))) {
