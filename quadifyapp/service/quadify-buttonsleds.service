@@ -6,10 +6,10 @@ StartLimitIntervalSec=0
 [Service]
 User=volumio
 Group=volumio
-WorkingDirectory=/data/plugins/system_hardware/quadify/quadifyapp/src
-Environment=PYTHONPATH=/data/plugins/system_hardware/quadify/quadifyapp/src
+WorkingDirectory=/data/plugins/system_hardware/quadify/quadifyapp
+Environment=PYTHONPATH=/data/plugins/system_hardware/quadify/quadifyapp
 Environment=QUADIFY_CONFIG_YAML=/data/plugins/system_hardware/quadify/quadifyapp/config.yaml
-ExecStart=/usr/bin/python3 /data/plugins/system_hardware/quadify/quadifyapp/src/scripts/buttonsleds_daemon.py
+ExecStart=/usr/bin/python3 /data/plugins/system_hardware/quadify/quadifyapp/scripts/buttonsleds_daemon.py
 Restart=always
 RestartSec=1
 StandardOutput=journal
