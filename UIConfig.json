@@ -95,10 +95,9 @@
       "icon": "fa-shield",
       "onSave": { "type": "controller", "endpoint": "system_hardware/quadify", "method": "saveSafety_controls" },
       "content": [
-        { "id": "safe_shutdown_enabled", "element": "switch", "label": "Safe shutdown button On/Off", "value": false },
-        { "id": "clean_mode_enabled", "element": "switch", "label": "Clean mode On/Off", "value": false }
+        { "id": "safe_shutdown_enabled", "element": "switch", "label": "Safe shutdown button On/Off", "value": false }
       ],
-      "saveButton": { "label": "Save", "data": ["safe_shutdown_enabled", "clean_mode_enabled"] }
+      "saveButton": { "label": "Save", "data": ["safe_shutdown_enabled"] }
     },
 
     {

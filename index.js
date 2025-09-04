@@ -31,6 +31,10 @@ const PREF_CANDIDATES = [
 // Buttons & LEDs service candidates
 const BUTTONSLEDS_UNIT_CANDIDATES = ['quadify-buttonsleds', 'buttonsleds'];
 
+// Safe-shutdown units we manage
+const SAFE_SHUTDOWN_UNIT_CANDIDATES = ['clean-poweroff', 'volumio-clean-poweroff']; // support old/new names
+const LEDSOFF_UNIT = 'quadify-leds-off';
+
 // LIRC filesystem
 const LIRC_PROFILES_DIR = path.join(PLUGIN_ROOT, 'quadifyapp', 'lirc', 'configurations');
 const LIRC_DST_DIR      = '/etc/lirc';
@@ -337,26 +341,24 @@ ControllerQuadify.prototype.onVolumioStart = function () {
     catch (e) { this.logger.warn('[Quadify] loadFile failed, starting fresh: ' + e.message); }
 
     const defaults = {
-      enableCava: false,
-      enableButtonsLED: false,
+      enableCava: true,
+      enableButtonsLED: true,
       mcp23017_address: '0x20',
       display_mode: 'modern',
       clock_font_key: 'clock_sans',
       show_seconds: false,
       show_date: false,
-      screensaver_enabled: false,
+      screensaver_enabled: true,
       screensaver_type: 'geo',
       screensaver_timeout: 3600,
       oled_brightness: 200,
       // New UI keys
-      enableSpectrum: false,
-      display_screen: 'vu',
+      enableSpectrum: true,
       display_rotate: '0',
-      enableIR: false,
+      enableIR: true,
       ir_remote_profile: '',
       ir_gpio_pin: 27,
-      safe_shutdown_enabled: false,
-      clean_mode_enabled: false
+      safe_shutdown_enabled: true,
     };
 
     let changed = false;
@@ -433,7 +435,6 @@ ControllerQuadify.prototype.getUIConfig = function () {
     set('ir_controller',    'enableIR',              !!pref.ir.enabled);
     set('ir_controller',    'ir_remote_profile',     String(pref.ir.profile || ''));
     set('safety_controls',  'safe_shutdown_enabled', !!pref.safety.safe_shutdown);
-    set('safety_controls',  'clean_mode_enabled',    !!pref.safety.clean_mode);
 
     // ---- IR profile options (from filesystem)
     const irSec = uiconf.sections.find(s => s.id === 'ir_controller');
@@ -649,6 +650,21 @@ ControllerQuadify.prototype.controlButtonsLeds = function (enable) {
       }
       return self.controlService(self.buttonsLedsUnit, enable);
     });
+};
+
+ControllerQuadify.prototype.controlSafeShutdown = function (enable) {
+  // Toggle both the “clean poweroff” unit (old/new names) and the LEDs-off unit
+  const jobs = [
+    this.controlService(LEDSOFF_UNIT, enable),
+    ...SAFE_SHUTDOWN_UNIT_CANDIDATES.map(u => this.controlService(u, enable))
+  ];
+  return libQ.allSettled(jobs).then(results => {
+    const failures = results.filter(r => r.state === 'rejected');
+    if (failures.length) {
+      this.logger.warn('[Quadify] Some safe-shutdown units failed to toggle.');
+    }
+    return results;
+  });
 };
 
 // ---------- MCP23017 / YAML ----------
@@ -971,16 +987,29 @@ ControllerQuadify.prototype.saveSafety_controls = function (data) {
   return loadRawPreferenceJSON()
     .then(raw => {
       const pref = buildCanonicalFromAny(raw, hwCfg);
-      if (flat.safe_shutdown_enabled !== undefined) pref.safety.safe_shutdown = logicValue(flat.safe_shutdown_enabled);
-      if (flat.clean_mode_enabled   !== undefined)  pref.safety.clean_mode    = logicValue(flat.clean_mode_enabled);
+      if (flat.safe_shutdown_enabled !== undefined)
+        pref.safety.safe_shutdown = logicValue(flat.safe_shutdown_enabled);
 
       const merged = withFlatMirrors(raw, pref);
       return saveCanonicalPreference(merged).then(() => pref);
     })
-    .then(pref => {
+    .then(async (pref) => {
       applyPreferenceToVconfInstance(self.config, pref);
       self.config.save();
-      self.commandRouter.pushToastMessage('success', 'Quadify', 'Safety settings saved please restart Quadify');
+
+      const want = !!pref.safety.safe_shutdown;
+
+      // Try both possible unit names, ignore failures so the save never errors
+      await libQ.allSettled([
+        self.controlService('clean-poweroff', want),
+        self.controlService('volumio-clean-poweroff', want), // legacy
+        self.controlService('quadify-leds-off', want)
+      ]);
+
+      self.commandRouter.pushToastMessage(
+        'success', 'Quadify',
+        'Safety settings saved' + (want ? ' (safe shutdown enabled)' : ' (safe shutdown disabled)')
+      );
       return {};
     })
     .catch(err => {
@@ -989,6 +1018,7 @@ ControllerQuadify.prototype.saveSafety_controls = function (data) {
       return {};
     });
 };
+
 
 // ---------- Detect Buttons/LEDs unit ----------
 ControllerQuadify.prototype.detectButtonsLedsUnit = function () {
@@ -1036,14 +1066,17 @@ ControllerQuadify.prototype.applyAllServiceToggles = function () {
   );
   const buttonsOn = logicValue(flatConfig.enableButtonsLED);
   const irOn      = logicValue(flatConfig.enableIR);
+  const safeOn    = logicValue(flatConfig.safe_shutdown_enabled); // NEW
 
   return libQ.allSettled([
     this.controlService('cava', spectrumOn),
     this.controlButtonsLeds(buttonsOn),
     this.controlService('lircd', irOn),
-    this.controlService('ir_listener', irOn)
+    this.controlService('ir_listener', irOn),
+    this.controlSafeShutdown(safeOn) // NEW
   ]);
 };
+
 
 module.exports = ControllerQuadify;
 
@@ -1056,22 +1089,21 @@ function buildPreferenceFromVconf(conf) {
 
   return {
     display: {
-      spectrum: !!get('enableSpectrum', get('enableCava', false)), // back-compat
+      spectrum: !!get('enableSpectrum', get('enableCava', true)), // back-compat
       screen:    get('display_screen', get('display_mode', 'vu')),
       rotate:    parseInt(get('display_rotate', 0), 10) || 0
     },
     controls: {
-      buttons_led_service: !!get('enableButtonsLED', false),
+      buttons_led_service: !!get('enableButtonsLED', true),
       mcp23017_address:     get('mcp23017_address', '0x20')
     },
     ir: {
-      enabled:  !!get('enableIR', false),
+      enabled:  !!get('enableIR', true),
       profile:   get('ir_remote_profile', ''),
       gpio_bcm:  parseInt(get('ir_gpio_pin', 27), 10) || 27
     },
     safety: {
-      safe_shutdown: !!get('safe_shutdown_enabled', false),
-      clean_mode:    !!get('clean_mode_enabled', false)
+      safe_shutdown: !!get('safe_shutdown_enabled', true),
     }
   };
 }

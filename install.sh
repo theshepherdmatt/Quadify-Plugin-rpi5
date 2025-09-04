@@ -60,7 +60,6 @@ ensure_lirc_symlink() {
   sudo chown volumio:volumio /home/volumio/lircd.conf || true
 }
 
-
 write_sudoers() {
   log "Installing sudoers drop-in for Quadify…"
   SUDOERS="/etc/sudoers.d/quadify-lirc"
@@ -344,7 +343,7 @@ install_shutdown_assets() {
   DST_UNIT_LED="/etc/systemd/system/quadify-leds-off.service"
   DST_UNIT_CPO="/etc/systemd/system/clean-poweroff.service"  # install under final name
 
-  # Verify sources exist
+    # Verify sources exist
   for f in "$SRC_LED_OFF" "$SRC_CLEAN_PO" "$SRC_UNIT_LED" "$SRC_UNIT_CPO"; do
     [ -f "$f" ] || { warn "Missing $f"; exit 1; }
   done
@@ -375,6 +374,9 @@ ENV
   log "Shutdown helpers installed & enabled."
 }
 
+# Apply kernel overlays for the On/Off SHIM and install shutdown helpers
+configure_onoff_shim_overlays
+install_shutdown_assets
 
 # -----------------------------
 # 6) systemd services
@@ -392,7 +394,7 @@ install_unit_from_template_or_simple \
  "quadify-buttonsleds.service" \
   "Quadify Buttons & LEDs" \
   "-" \
-  "/usr/bin/python3 /data/plugins/system_hardware/quadify/quadifyapp/src/scripts/buttonsleds_daemon.py"
+  "/usr/bin/python3 /data/plugins/system_hardware/quadify/quadifyapp/scripts/buttonsleds_daemon.py"
 
 # ir-listener.service (if script exists)
 if [ -f "$PLUGIN_DIR/quadifyapp/src/hardware/ir_listener.py" ]; then
@@ -437,16 +439,15 @@ write_sudoers
 # -----------------------------
 configure_mpd_fifo
 
-log "Installing CAVA (local build); will fall back to system package if build fails…"
-FALLBACK=0
-if install_cava_from_fork; then
-  log "Local CAVA built."
+log "Installing CAVA from repo (skipping local build)…"
+FALLBACK=1
+run apt-get update
+if apt-get install -y cava; then
+  log "System CAVA installed."
 else
-  warn "Local CAVA build failed; installing system cava as fallback."
-  FALLBACK=1
-  run apt-get update
-  run apt-get install -y cava
+  warn "System CAVA not available; continuing without it."
 fi
+
 
 # Point ExecStart to system cava if we fell back
 if [ "$FALLBACK" -eq 1 ]; then
