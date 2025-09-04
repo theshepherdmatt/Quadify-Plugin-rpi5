@@ -686,15 +686,11 @@ ControllerQuadify.prototype.enforceButtonsFromPreference = async function () {
   }
 };
 
-
 ControllerQuadify.prototype.controlSafeShutdown = function (enable) {
-  // LEDs-off must run only at shutdown, never at boot.
   return libQ.allSettled([
     this.enableOnly('quadify-leds-off', enable),
-
-    // Button SHIM: enable it; OK to start/stop this one during runtime
-    this.controlService('clean-poweroff', enable),
-    this.controlService('volumio-clean-poweroff', enable) // harmless if missing
+    this.enableOnly('clean-poweroff', enable),
+    this.enableOnly('volumio-clean-poweroff', enable)
   ]);
 };
 
@@ -1018,9 +1014,9 @@ ControllerQuadify.prototype.saveSafety_controls = function (data) {
   return loadRawPreferenceJSON()
     .then(raw => {
       const pref = buildCanonicalFromAny(raw, hwCfg);
-      if (flat.safe_shutdown_enabled !== undefined)
+      if (flat.safe_shutdown_enabled !== undefined) {
         pref.safety.safe_shutdown = logicValue(flat.safe_shutdown_enabled);
-
+      }
       const merged = withFlatMirrors(raw, pref);
       return saveCanonicalPreference(merged).then(() => pref);
     })
@@ -1030,16 +1026,13 @@ ControllerQuadify.prototype.saveSafety_controls = function (data) {
 
       const want = !!pref.safety.safe_shutdown;
 
-      // Try both possible unit names, ignore failures so the save never errors
-      await libQ.allSettled([
-        self.controlService('clean-poweroff', want),
-        self.controlService('volumio-clean-poweroff', want), // legacy
-        self.controlService('quadify-leds-off', want)
-      ]);
+      // IMPORTANT: only enable/disable units; DO NOT start them (avoids LEDs turning off now)
+      await self.controlSafeShutdown(want);
 
       self.commandRouter.pushToastMessage(
-        'success', 'Quadify',
-        'Safety settings saved' + (want ? ' (safe shutdown enabled)' : ' (safe shutdown disabled)')
+        'success',
+        'Quadify',
+        want ? 'Safety: clean shutdown enabled' : 'Safety: clean shutdown disabled'
       );
       return {};
     })
@@ -1049,7 +1042,6 @@ ControllerQuadify.prototype.saveSafety_controls = function (data) {
       return {};
     });
 };
-
 
 // ---------- Detect Buttons/LEDs unit ----------
 ControllerQuadify.prototype.detectButtonsLedsUnit = function () {

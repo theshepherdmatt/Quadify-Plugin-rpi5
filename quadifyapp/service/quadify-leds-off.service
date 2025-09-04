@@ -2,7 +2,7 @@
 Description=Turn off MCP23017 LEDs before poweroff
 DefaultDependencies=no
 Before=poweroff.target halt.target shutdown.target
-After=quadify.service early_led8.service
+After=quadify-buttonsleds.service
 
 [Service]
 Type=oneshot

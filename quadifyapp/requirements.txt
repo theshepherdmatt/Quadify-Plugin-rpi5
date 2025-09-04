@@ -31,7 +31,6 @@ python-engineio==3.14.2
 python-socketio==4.6.1
 pyusb==1.2.1
 pyxdg==0.25
-PyYAML==6.0.1
 requests==2.21.0
 RPi.GPIO==0.7.0
 SecretStorage==2.3.1
@@ -50,4 +49,5 @@ CairoSVG>=2.7
 cairocffi>=1.6
 tinycss2>=1.2
 cssselect2>=0.7
-defusedxml>=0.7
+defusedxml>=0.7PyYAML==3.13; python_version < "3.8"
+PyYAML==6.0.1; python_version >= "3.8"

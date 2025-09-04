@@ -1,10 +1,14 @@
 # src/network/volumio_listener.py
 
 import socketio
-import logging
 import time
 import threading
 from blinker import Signal
+import logging
+logging.getLogger("engineio").setLevel(logging.WARNING)
+logging.getLogger("engineio.client").setLevel(logging.WARNING)
+logging.getLogger("socketio").setLevel(logging.WARNING)
+logging.getLogger("socketio.client").setLevel(logging.WARNING)
 
 class VolumioListener:
     def __init__(self, host='localhost', port=3000, reconnect_delay=5):
@@ -57,16 +61,23 @@ class VolumioListener:
         self.connect()
 
     def register_socketio_events(self):
-        """Register events to listen to from the SocketIO server."""
         self.logger.info("[VolumioListener] Registering SocketIO events...")
-        self.socketIO.on('connect', self.on_connect)
-        self.socketIO.on('disconnect', self.on_disconnect)
-        self.socketIO.on('pushState', self.on_push_state)
-        self.socketIO.on('pushBrowseLibrary', self.on_push_browse_library)
-        self.socketIO.on('pushTrack', self.on_push_track)
-        self.socketIO.on('pushToastMessage', self.on_push_toast_message)
-        self.socketIO.on('volume', self.set_volume)
-        self.socketIO.on('pushBrowseSources', self.on_push_browse_sources)
+        sio = self.socketIO
+
+        # Explicitly ignore Volumio Live Log stream events
+        sio.on('LLogOpen', lambda *a, **k: None)
+        sio.on('LLogProgress', lambda *a, **k: None)
+        sio.on('LLogClose', lambda *a, **k: None)
+
+        # existing bindings...
+        sio.on('connect', self.on_connect)
+        sio.on('disconnect', self.on_disconnect)
+        sio.on('pushState', self.on_push_state)
+        sio.on('pushBrowseLibrary', self.on_push_browse_library)
+        sio.on('pushTrack', self.on_push_track)
+        sio.on('pushToastMessage', self.on_push_toast_message)
+        sio.on('volume', self.set_volume)
+        sio.on('pushBrowseSources', self.on_push_browse_sources)
 
     
     def set_volume(self, value):
