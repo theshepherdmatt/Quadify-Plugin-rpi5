@@ -146,12 +146,21 @@ function shallowMerge(base, patch) {
   return out;
 }
 
-function coerceHexAddr(a, fb = '0x20') {
-  if (a === undefined || a === null || a === '') return fb;
-  let s = String(a).trim().toLowerCase();
-  if (!s.startsWith('0x')) s = '0x' + s;
-  return s;
+function hexStrip0x(s) {
+  const t = String(s ?? '').trim().toLowerCase();
+  return t.startsWith('0x') ? t.slice(2) : t;
 }
+
+// "20" => 32; hex-only parsing
+function hexNoPrefixToInt(s, fb = 32) {
+  const v = parseInt(hexStrip0x(s), 16);
+  return Number.isFinite(v) ? v : fb;
+}
+
+function intToHexNoPrefix(n) {
+  return (Number.isFinite(+n) ? (+n).toString(16) : '20');
+}
+
 
 // Map canonical display.screen → legacy flat keys
 function screenToLegacy(screen, prevRaw = {}) {
@@ -226,7 +235,7 @@ const PREF_TMP  = PREF_PATH + '.tmp';
 
 const PREF_NESTED_DEFAULTS = {
   display:  { spectrum: true, screen: 'modern', rotate: 180, oled_brightness: 255 },
-  controls: { buttons_led_service: true, mcp23017_address: '0x20' },
+  controls: { buttons_led_service: true, mcp23017_address: '20' },
   ir:       { enabled: true, profile: 'Xiaomi IR for TV box', gpio_bcm: 27 },
   safety:   { safe_shutdown: true }
 };
@@ -252,7 +261,7 @@ function writePrefsRaw(obj) {
 
 
 function coerceHexAddrSimple(v) {
-  if (v == null || v === '') return '0x20';
+  if (v == null || v === '') return '20';
   let s = String(v).trim().toLowerCase();
   if (!s.startsWith('0x')) s = '0x' + s;
   return s;
@@ -314,7 +323,7 @@ function buildCanonicalFromAny(rawOrIgnored, hwYaml = {}) {
   const out = shallowMerge(
     {
       display:  { spectrum: true,  screen: 'modern', rotate: 0, oled_brightness: 255 },
-      controls: { buttons_led_service: true, mcp23017_address: '0x20' },
+      controls: { buttons_led_service: true, mcp23017_address: '20' },
       ir:       { enabled: true,  profile: 'Xiaomi IR for TV box',      gpio_bcm: 27 },
       safety:   { safe_shutdown: true }
     },
@@ -339,15 +348,35 @@ function buildCanonicalFromAny(rawOrIgnored, hwYaml = {}) {
   if (hwYaml.display_rotate !== undefined) {
     out.display.rotate = parseInt(hwYaml.display_rotate, 10) || 0;
   }
-  if (hwYaml.mcp23017_address) {
-    out.controls.mcp23017_address = coerceHexAddrSimple(hwYaml.mcp23017_address);
-  }
-  if (hwYaml.ir_gpio_pin !== undefined) {
-    out.ir.gpio_bcm = parseInt(hwYaml.ir_gpio_pin, 10) || 27;
+
+  if (hwYaml.mcp23017_address !== undefined) {
+    // Normalize YAML (number like 32, or string like "0x20" / "20") to no-prefix hex "20"
+    const val = hwYaml.mcp23017_address;
+    let noPrefix;
+
+    if (typeof val === 'number' && Number.isFinite(val)) {
+      noPrefix = val.toString(16);
+    } else {
+      const s = String(val).trim().toLowerCase();
+      if (s.startsWith('0x')) {
+        noPrefix = s.slice(2);
+      } else if (/^[0-9a-f]{1,2}$/.test(s)) {
+        noPrefix = s;
+      } else {
+        noPrefix = '20'; // safe fallback
+      }
+    }
+
+    out.controls.mcp23017_address = noPrefix;
   }
 
-  return out;
+if (hwYaml.ir_gpio_pin !== undefined) {
+  out.ir.gpio_bcm = parseInt(hwYaml.ir_gpio_pin, 10) || 27;
 }
+
+return out;        // <-- add this
+}    
+
 
 async function getCanonicalPreference(hwYaml) {
   const raw = await loadRawPreferenceJSON();      // full file (top-level + nested)
@@ -364,7 +393,7 @@ function applyPreferenceToVconfInstance(vconf, pref) {
 
   // buttons/LEDs
   vconf.set('enableButtonsLED', !!pref.controls.buttons_led_service);
-  vconf.set('mcp23017_address', String(pref.controls.mcp23017_address || '0x20'));
+  vconf.set('mcp23017_address', String(pref.controls.mcp23017_address || '20'));
 
   // IR
   vconf.set('enableIR',          !!pref.ir.enabled);
@@ -489,7 +518,7 @@ ControllerQuadify.prototype.onVolumioStart = function () {
     const defaults = {
       enableCava: true,
       enableButtonsLED: true,
-      mcp23017_address: '0x20',
+      mcp23017_address: '20',
       display_mode: 'modern',
       clock_font_key: 'clock_sans',
       show_seconds: false,
@@ -611,8 +640,7 @@ ControllerQuadify.prototype.getUIConfig = function () {
     // ---- YAML truths (hardware) ----
     const rotateWant = String(hwCfg.display_rotate ?? pref.display.rotate ?? '0');
     setSelect('display_settings', 'display_rotate', rotateWant); // dropdown
-    setRaw   ('buttons_leds',     'mcp23017_address',
-      coerceHexAddr(hwCfg.mcp23017_address || pref.controls.mcp23017_address || '0x20'));
+
     setRaw   ('ir_controller',    'ir_gpio_pin',
       parseInt(hwCfg.ir_gpio_pin ?? pref.ir.gpio_bcm ?? 27, 10));
 
@@ -620,7 +648,8 @@ ControllerQuadify.prototype.getUIConfig = function () {
     setRaw   ('display_settings', 'enableSpectrum', !!pref.display.spectrum);
     setSelect('display_settings', 'display_screen', screenForUi); // dropdown
 
-    setRaw   ('buttons_leds',     'enableButtonsLED', !!pref.controls.buttons_led_service);
+    setRaw('buttons_leds', 'mcp23017_address',
+      hexStrip0x(hwCfg.mcp23017_address ?? pref.controls.mcp23017_address ?? '20'));
 
     setRaw   ('ir_controller',    'enableIR',          !!pref.ir.enabled);
 
@@ -696,7 +725,7 @@ ControllerQuadify.prototype.setUIConfig = function (data) {
 
     mcp23017_address: pick(
       data.mcp23017_address !== undefined ? flatten(data.mcp23017_address) : undefined,
-      oldConfig.mcp23017_address || '0x20'
+      oldConfig.mcp23017_address || '20'
     ),
 
     display_mode: pick(
@@ -730,7 +759,7 @@ ControllerQuadify.prototype.setUIConfig = function (data) {
   };
 
   if (mergedConfig.mcp23017_address) {
-    mergedConfig.mcp23017_address = coerceHexAddr(mergedConfig.mcp23017_address);
+    mergedConfig.mcp23017_address = hexStrip0x(mergedConfig.mcp23017_address);
   }
 
   Object.keys(mergedConfig).forEach(k => this.config.set(k, mergedConfig[k]));
@@ -941,40 +970,43 @@ ControllerQuadify.prototype.controlSafeShutdown = async function (enable) {
 ControllerQuadify.prototype.updateMcpConfig = function (data) {
   const self = this;
 
-  // normalize to numeric I2C address (default 0x20 => 32)
-  const toI2cInt = (val) => {
-    if (val == null || val === '') return 32;
-    if (typeof val === 'number' && Number.isFinite(val)) return val;
-    const s = String(val).trim().toLowerCase();
-    const n = s.startsWith('0x') ? parseInt(s, 16) : parseInt(s, 10);
-    return Number.isFinite(n) ? n : 32;
+  // --- helpers: UI uses hex-without-0x (e.g. "20") ---
+  const hexStrip0x = (s) => {
+    const t = String(s ?? '').trim().toLowerCase();
+    return t.startsWith('0x') ? t.slice(2) : t;
+  };
+  const hexNoPrefixToInt = (s, fb = 32) => {
+    const v = parseInt(hexStrip0x(s), 16);
+    return Number.isFinite(v) ? v : fb;
   };
 
-  const rawVal = data?.mcp23017_address;
-  const i2cInt = toI2cInt(rawVal);
-  const hexStr = '0x' + i2cInt.toString(16);
+  // 1) Read UI value (hex, no prefix). Default "20" (=> 20).
+  const rawUi = data?.mcp23017_address;
+  const hexUi = hexStrip0x(rawUi || '20');   // e.g. "20"
+  const i2cInt = hexNoPrefixToInt(hexUi, 32); // e.g. 32
 
-  // --- YAML (daemon) wants a NUMBER
+  // 2) YAML (daemon) wants a NUMBER
   const cfg = self.loadConfigYaml();
-  cfg.mcp23017_address = i2cInt;          // e.g. 32
+  cfg.mcp23017_address = i2cInt; // numeric for Python
   self.saveConfigYaml(cfg);
-  self.logger.info(`[Quadify][YAML] mcp23017_address <= ${i2cInt} (from ${rawVal})`);
+  self.logger.info(`[Quadify][YAML] mcp23017_address <= ${i2cInt} (from UI ${hexUi})`);
 
-  // --- v-conf/UI mirrors use hex string for readability
-  self.config.set('mcp23017_address', hexStr);
+  // 3) v-conf/UI mirror stores *no-prefix hex* (e.g. "20")
+  self.config.set('mcp23017_address', hexUi);
   self.config.save();
 
-  self.commandRouter.pushToastMessage('success', 'Quadify', `MCP23017 address saved: ${hexStr}`);
+  self.commandRouter.pushToastMessage('success', 'Quadify', `MCP23017 address saved: ${hexUi}`);
 
+  // 4) preference.json: keep controls.mcp23017_address as *no-prefix hex* "20"
   const hwCfg = self.loadConfigYaml();
   return loadRawPreferenceJSON()
     .then(raw => {
       const canonical = buildCanonicalFromAny(raw, hwCfg);
-      canonical.controls.mcp23017_address = hexStr; // keep prefs as hex
+      canonical.controls.mcp23017_address = hexUi; // store "20", not "20"
       return saveCanonicalPreference(withFlatMirrors(raw, canonical));
     })
     .then(async () => {
-      // Restart the daemon so it re-reads YAML immediately
+      // 5) Restart the daemon so it re-reads YAML immediately
       await self.detectButtonsLedsUnit();
       if (self.buttonsLedsUnit) {
         self.logger.info(`[Quadify][SYSD] restart ${self.buttonsLedsUnit}.service to apply new I2C addr`);
@@ -1015,11 +1047,19 @@ ControllerQuadify.prototype.autoDetectMCP = function () {
     }
 
     const cfg = this.loadConfigYaml();
-    cfg.mcp23017_address = foundAddr || '';
-    this.saveConfigYaml(cfg);
 
-    this.config.set('mcp23017_address', foundAddr || '');
-    this.config.save();
+    // Keep YAML numeric (e.g. 32), UI/v-conf hex (e.g. "0x20")
+    if (foundAddr) {
+      const i2cInt = parseInt(foundAddr, 16); // "0x20" -> 32
+      cfg.mcp23017_address = i2cInt;          // YAML numeric
+      this.saveConfigYaml(cfg);
+
+      this.config.set('mcp23017_address', foundAddr.toLowerCase()); // v-conf hex string for UI
+      this.config.save();
+    } else {
+      // If nothing found, don’t change YAML; only notify
+      this.saveConfigYaml(cfg);
+    }
 
     const hwCfg = this.loadConfigYaml();
     loadRawPreferenceJSON()
@@ -1347,31 +1387,48 @@ ControllerQuadify.prototype.applyAllServiceTogglesFromPreference = async functio
 };
 
 
+// ---------- Buttons & LEDs (save) ----------
 ControllerQuadify.prototype.saveButtons_leds = function (data) {
   const self = this;
   const flat = getFlatConfig(data || {});
   self.logger.info('[Quadify] saveButtons_leds flat: ' + JSON.stringify(flat));
 
-  // helper: normalize to numeric I2C address (default 0x20 => 32)
-  const toI2cInt = (val) => {
-    if (val == null || val === '') return 32;
-    const s = String(val).trim().toLowerCase();
-    const n = s.startsWith('0x') ? parseInt(s, 16) : parseInt(s, 10);
-    return Number.isFinite(n) ? n : 32;
+  // helpers: UI uses hex-without-0x (e.g. "20")
+  const hexStrip0x = (s) => {
+    const t = String(s ?? '').trim().toLowerCase();
+    return t.startsWith('0x') ? t.slice(2) : t;
+  };
+  const hexNoPrefixToInt = (s, fb = 32) => {
+    const v = parseInt(hexStrip0x(s), 16);
+    return Number.isFinite(v) ? v : fb;
   };
 
-  // --- YAML (daemon) wants a NUMBER, not "0x.."
-  const cfg = self.loadConfigYaml();
-  let newI2cInt = null;
+  // --- 1) Address handling (optional field) ---
+  // Accept either flat.mcp23017_address or data.mcp23017_address; default to keep-as-is if absent
+  const addrProvided = flat.mcp23017_address !== undefined || (data && data.mcp23017_address !== undefined);
+  const rawUi = addrProvided ? (flat.mcp23017_address ?? data.mcp23017_address) : undefined;
 
-  if (flat.mcp23017_address !== undefined) {
-    newI2cInt = toI2cInt(flat.mcp23017_address);
-    cfg.mcp23017_address = newI2cInt;               // <-- numeric for Python
+  let hexUi = null;
+  let i2cInt = null;
+
+  if (addrProvided) {
+    hexUi  = hexStrip0x(rawUi || '20');      // "20"
+    i2cInt = hexNoPrefixToInt(hexUi, 32);    // 32
+
+    // YAML (daemon) wants a NUMBER
+    const cfg = self.loadConfigYaml();
+    cfg.mcp23017_address = i2cInt;
     self.saveConfigYaml(cfg);
-    self.logger.info(`[Quadify][YAML] mcp23017_address <= ${newI2cInt} (from ${flat.mcp23017_address})`);
+    self.logger.info(`[Quadify][YAML] mcp23017_address <= ${i2cInt} (from UI ${hexUi})`);
+
+    // v-conf mirror keeps no-prefix hex so UI shows "20"
+    self.config.set('mcp23017_address', hexUi);
+    self.config.save();
   }
 
   const hwCfg = self.loadConfigYaml();
+
+  // --- 2) Persist preference.json (nested canonical + flat mirrors) ---
   return loadRawPreferenceJSON()
     .then(raw => {
       const prefObj = buildCanonicalFromAny(raw, hwCfg);
@@ -1379,23 +1436,27 @@ ControllerQuadify.prototype.saveButtons_leds = function (data) {
       if (flat.enableButtonsLED !== undefined) {
         prefObj.controls.buttons_led_service = logicValue(flat.enableButtonsLED);
       }
-
-      // Keep preference (UI/ModeManager) as hex string for readability
-      if (newI2cInt !== null) {
-        prefObj.controls.mcp23017_address = '0x' + newI2cInt.toString(16);
+      if (addrProvided && hexUi !== null) {
+        // keep prefs as no-prefix hex "20"
+        prefObj.controls.mcp23017_address = hexUi;
       }
 
       const merged = withFlatMirrors(raw, prefObj);
       return saveCanonicalPreference(merged).then(() => prefObj);
     })
     .then(prefObj => {
+      // --- 3) Mirror to v-conf for UI reflection ---
       applyPreferenceToVconfInstance(self.config, prefObj);
+      // ensure the mcp address in v-conf remains no-prefix hex if we changed it
+      if (addrProvided && hexUi !== null) self.config.set('mcp23017_address', hexUi);
       self.config.save();
 
+      // Ensure we know the unit name before toggling
       const ready = self.buttonsLedsUnit ? libQ.resolve() : self.detectButtonsLedsUnit();
       return ready.then(() => prefObj);
     })
     .then(prefObj => {
+      // --- 4) Toggle the service according to preference ---
       const want = !!prefObj.controls.buttons_led_service;
       self.logger.info(`[Quadify][TOGGLE] Buttons/LEDs => ${want ? 'enable' : 'disable'} (unit=${self.buttonsLedsUnit || 'n/a'})`);
       return self.controlButtonsLeds(want);
@@ -1539,7 +1600,7 @@ function buildPreferenceFromVconf(conf) {
     },
     controls: {
       buttons_led_service: !!get('enableButtonsLED', true),
-      mcp23017_address:     get('mcp23017_address', '0x20')
+      mcp23017_address:     get('mcp23017_address', '20')
     },
     ir: {
       enabled:  !!get('enableIR', true),
