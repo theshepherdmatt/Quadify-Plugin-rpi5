@@ -4,7 +4,7 @@
   "prettyName": "Quadify Plugin",
   "description": "Integrates the Quadify Python interface with Volumio.",
   "author": "Matt Shepherd",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "category": "system_hardware",
   "plugin_type": "system_hardware",
   "icon": "fa-cogs",
