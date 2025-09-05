@@ -648,8 +648,11 @@ ControllerQuadify.prototype.getUIConfig = function () {
     setRaw   ('display_settings', 'enableSpectrum', !!pref.display.spectrum);
     setSelect('display_settings', 'display_screen', screenForUi); // dropdown
 
-    setRaw('buttons_leds', 'mcp23017_address',
-      hexStrip0x(hwCfg.mcp23017_address ?? pref.controls.mcp23017_address ?? '20'));
+    setRaw(
+      'buttons_leds',
+      'mcp23017_address',
+      '0x' + String(pref.controls.mcp23017_address ?? '20')
+    );
 
     setRaw   ('ir_controller',    'enableIR',          !!pref.ir.enabled);
 
@@ -1030,17 +1033,23 @@ ControllerQuadify.prototype.autoDetectMCP = function () {
       return defer.reject(err);
     }
 
-    const lines = stdout.split('\n').slice(1);
-    let foundAddr = null;
+    // Find the first detected address from i2cdetect grid
+    const lines = (stdout || '').split('\n').slice(1);
+    let foundAddr = null; // like "0x20"
 
     for (const line of lines) {
       const parts = line.trim().split(/\s+/);
       if (!parts.length) continue;
-      const row = parts[0]?.replace(':', '');
+      const row = (parts[0] || '').replace(':', '');
       for (let i = 1; i < parts.length; i++) {
-        if (parts[i] !== '--') {
-          foundAddr = '0x' + (parseInt(row, 16) + (i - 1)).toString(16);
-          break;
+        const cell = parts[i];
+        if (cell && cell !== '--') {
+          const base = parseInt(row, 16);
+          if (Number.isFinite(base)) {
+            const val = base + (i - 1);
+            foundAddr = '0x' + val.toString(16);
+            break;
+          }
         }
       }
       if (foundAddr) break;
@@ -1048,35 +1057,36 @@ ControllerQuadify.prototype.autoDetectMCP = function () {
 
     const cfg = this.loadConfigYaml();
 
-    // Keep YAML numeric (e.g. 32), UI/v-conf hex (e.g. "0x20")
     if (foundAddr) {
-      const i2cInt = parseInt(foundAddr, 16); // "0x20" -> 32
-      cfg.mcp23017_address = i2cInt;          // YAML numeric
+      const noPrefix = foundAddr.replace(/^0x/i, '').toLowerCase(); // "0x20" -> "20"
+      const i2cInt   = parseInt(noPrefix, 16);                      // "20" -> 32
+
+      // YAML: numeric
+      cfg.mcp23017_address = i2cInt;
       this.saveConfigYaml(cfg);
 
-      this.config.set('mcp23017_address', foundAddr.toLowerCase()); // v-conf hex string for UI
+      // v-conf/UI: no-prefix hex "20"
+      this.config.set('mcp23017_address', noPrefix);
       this.config.save();
-    } else {
-      // If nothing found, don’t change YAML; only notify
-      this.saveConfigYaml(cfg);
+
+      // prefs: no-prefix hex "20"
+      const hwCfg = this.loadConfigYaml();
+      loadRawPreferenceJSON()
+        .then(raw => {
+          const canonical = buildCanonicalFromAny(raw, hwCfg);
+          canonical.controls.mcp23017_address = noPrefix;
+          return saveCanonicalPreference(withFlatMirrors(raw, canonical));
+        })
+        .catch(e => this.logger.warn('[Quadify] pref sync after autoDetect: ' + (e?.message || e)));
+
+      this.commandRouter.pushToastMessage('success', 'Quadify', 'Detected MCP23017 at ' + foundAddr.toLowerCase());
+      return defer.resolve({ mcp23017_address: noPrefix });
     }
 
-    const hwCfg = this.loadConfigYaml();
-    loadRawPreferenceJSON()
-      .then(raw => {
-        const canonical = buildCanonicalFromAny(raw, hwCfg);
-        if (foundAddr) canonical.controls.mcp23017_address = foundAddr;
-        return saveCanonicalPreference(withFlatMirrors(raw, canonical));
-      })
-      .catch(e => this.logger.warn('[Quadify] pref sync after autoDetect: ' + (e?.message || e)));
-
-    if (!foundAddr) {
-      this.commandRouter.pushToastMessage('error', 'Quadify', 'No MCP23017 board detected');
-      return defer.resolve();
-    }
-
-    this.commandRouter.pushToastMessage('success', 'Quadify', 'Detected MCP23017 at ' + foundAddr);
-    defer.resolve({ mcp23017_address: foundAddr });
+    // Not found: don’t change YAML; just notify
+    this.saveConfigYaml(cfg);
+    this.commandRouter.pushToastMessage('error', 'Quadify', 'No MCP23017 board detected');
+    return defer.resolve();
   });
 
   return defer.promise;
