@@ -335,26 +335,28 @@ install_shutdown_assets() {
   SRC_LED_OFF="$PLUGIN_DIR/quadifyapp/scripts/quadify-leds-off.py"
   SRC_CLEAN_PO="$PLUGIN_DIR/quadifyapp/scripts/clean-poweroff.sh"
   SRC_UNIT_LED="$PLUGIN_DIR/quadifyapp/service/quadify-leds-off.service"
-  SRC_UNIT_CPO="$PLUGIN_DIR/quadifyapp/service/volumio-clean-poweroff.service"  # repo name
+  SRC_UNIT_CPO="$PLUGIN_DIR/quadifyapp/service/volumio-clean-poweroff.service"
 
   # Destinations on the system
   DST_LED_OFF="/usr/local/bin/quadify-leds-off.py"
   DST_CLEAN_PO="/usr/local/bin/clean-poweroff.sh"
   DST_UNIT_LED="/etc/systemd/system/quadify-leds-off.service"
-  DST_UNIT_CPO="/etc/systemd/system/clean-poweroff.service"  # install under final name
+  DST_UNIT_CPO="/etc/systemd/system/volumio-clean-poweroff.service"
 
-    # Verify sources exist
+  # Verify sources exist (warn, don’t abort the whole install)
+  missing=0
   for f in "$SRC_LED_OFF" "$SRC_CLEAN_PO" "$SRC_UNIT_LED" "$SRC_UNIT_CPO"; do
-    [ -f "$f" ] || { warn "Missing $f"; exit 1; }
+    if [ ! -f "$f" ]; then
+      warn "Missing $f"
+      missing=1
+    fi
   done
 
-  # Copy scripts
-  run install -m 755 "$SRC_LED_OFF" "$DST_LED_OFF"
-  run install -m 755 "$SRC_CLEAN_PO" "$DST_CLEAN_PO"
-
-  # Copy units (644)
-  run install -m 644 "$SRC_UNIT_LED" "$DST_UNIT_LED"
-  run install -m 644 "$SRC_UNIT_CPO" "$DST_UNIT_CPO"
+  # Copy what we have; skip missing ones
+  [ -f "$SRC_LED_OFF" ] && run install -m 755 "$SRC_LED_OFF" "$DST_LED_OFF"
+  [ -f "$SRC_CLEAN_PO" ] && run install -m 755 "$SRC_CLEAN_PO" "$DST_CLEAN_PO"
+  [ -f "$SRC_UNIT_LED" ] && run install -m 644 "$SRC_UNIT_LED" "$DST_UNIT_LED"
+  [ -f "$SRC_UNIT_CPO" ] && run install -m 644 "$SRC_UNIT_CPO" "$DST_UNIT_CPO"
 
   # Default env (UI may override later)
   run install -d -m 755 /etc/quadify
@@ -366,13 +368,15 @@ POST_HOOK=""
 STOP_VOL="1"
 ENV
 
-  # Enable
   run systemctl daemon-reload
-  run systemctl enable quadify-leds-off.service
-  run systemctl enable clean-poweroff.service
 
-  log "Shutdown helpers installed & enabled."
+  # Enable what exists; don’t fail if absent
+  [ -f "$DST_UNIT_LED" ] && run systemctl enable quadify-leds-off.service || true
+  [ -f "$DST_UNIT_CPO" ] && run systemctl enable volumio-clean-poweroff.service || true
+
+  log "Shutdown helpers installed."
 }
+
 
 # Apply kernel overlays for the On/Off SHIM and install shutdown helpers
 configure_onoff_shim_overlays
@@ -396,13 +400,16 @@ install_unit_from_template_or_simple \
   "-" \
   "/usr/bin/python3 /data/plugins/system_hardware/quadify/quadifyapp/scripts/buttonsleds_daemon.py"
 
-# ir-listener.service (if script exists)
+# ir_listener.service (if script exists)
 if [ -f "$PLUGIN_DIR/quadifyapp/src/hardware/ir_listener.py" ]; then
   install_unit_from_template_or_simple \
-    "ir-listener.service" \
-    "Quadify IR Listener" \
+    "ir_listener.service" \
+    "Quadify IR Listener (LIRC → ModeManager)" \
     "quadifyapp/src/hardware" \
     "/usr/bin/python3 $PLUGIN_DIR/quadifyapp/src/hardware/ir_listener.py"
+
+  run systemctl daemon-reload
+  run systemctl enable --now ir_listener.service || true
 fi
 
 # early_led8.service (if script exists)

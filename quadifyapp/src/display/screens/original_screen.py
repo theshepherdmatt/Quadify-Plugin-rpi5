@@ -309,19 +309,23 @@ class OriginalScreen(BaseManager):
             self.logger.debug(f"OriginalScreen: Pasted service icon '{service}' at ({icon_x}, {icon_y}).")
         else:
             # Fallback to default icon if available
-            icon = self.display_manager.default_icon
+            # Draw service icon if we have one
+            icon = self.display_manager.icons.get(service)
             if icon:
+                # Flatten alpha if needed
                 if icon.mode == "RGBA":
-                    bg = Image.new("RGB", icon.size, (0,0,0))
+                    bg = Image.new("RGB", icon.size, (0, 0, 0))
                     bg.paste(icon, mask=icon.split()[3])
                     icon = bg
-                icon_x = self.display_manager.oled.width - icon.width - 20
-                icon_y = 5
+                icon_padding_right = 12
+                icon_padding_top   = 6
+                icon_x = self.display_manager.oled.width - icon.width - icon_padding_right
+                icon_y = icon_padding_top
                 base_image.paste(icon, (icon_x, icon_y))
-                self.logger.debug(f"OriginalScreen: Pasted default icon at ({icon_x}, {icon_y}).")
+                self.logger.debug(f"OriginalScreen: Pasted service icon '{service}' at ({icon_x}, {icon_y}).")
             else:
-                self.logger.warning("OriginalScreen: No icon or default icon available.")
-
+                # No icon available, skip quietly (no default icon)
+                self.logger.debug("OriginalScreen: No service icon available; skipping icon draw.")
 
     # ------------------------------------------------------------------
     #   Volume Control / Toggling

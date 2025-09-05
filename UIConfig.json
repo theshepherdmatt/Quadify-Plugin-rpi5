@@ -16,16 +16,14 @@
           "label": "Screen",
           "value": "modern-bars",
           "options": [
-            { "label": "— Modern — Bars",          "value": "modern-bars" },
-            { "label": "— Modern — Dots",          "value": "modern-dots" },
-            { "label": "— Modern — Oscilloscope",  "value": "modern-osci" },
-            { "label": "— Modern — No Spectrum",   "value": "modern" },
-
-            { "label": "Digital VU",               "value": "digitalvuscreen" },
-            { "label": "Classic VU",               "value": "vuscreen" },
-
-            { "label": "Original",                 "value": "original" },
-            { "label": "Minimal",                  "value": "minimal" }
+            { "label": "Modern — Bars",         "value": "modern-bars" },
+            { "label": "Modern — Dots",         "value": "modern-dots" },
+            { "label": "Modern — Oscilloscope", "value": "modern-osci" },
+            { "label": "Modern — No Spectrum",  "value": "modern" },
+            { "label": "Digital VU",            "value": "digitalvuscreen" },
+            { "label": "Classic VU",            "value": "vuscreen" },
+            { "label": "Original",              "value": "original" },
+            { "label": "Minimal",               "value": "minimal" }
           ]
         },
 
@@ -33,13 +31,13 @@
           "id": "display_rotate",
           "element": "select",
           "label": "Rotate",
+          "description": "",
           "value": "0",
           "options": [
             { "label": "0°",   "value": "0" },
             { "label": "180°", "value": "180" }
           ]
         }
-
       ],
       "saveButton": { "label": "Save", "data": ["enableSpectrum", "display_screen", "display_rotate"] }
     },
@@ -50,8 +48,8 @@
       "icon": "fa-lightbulb-o",
       "onSave": { "type": "controller", "endpoint": "system_hardware/quadify", "method": "saveButtons_leds" },
       "content": [
-        { "id": "enableButtonsLED", "element": "switch", "label": "Buttons & LEDs Service On/Off", "value": true },
-        { "id": "mcp23017_address", "element": "input", "type": "text", "label": "I²C address", "value": "0x20" },
+        { "id": "enableButtonsLED", "element": "switch", "label": "Buttons & LEDs On/Off", "value": true },
+        { "id": "mcp23017_address", "element": "input", "type": "text", "label": "I²C address", "placeholder": "0x20", "value": "0x20" },
         {
           "element": "button",
           "label": "Search / Auto-detect MCP23017",
