@@ -123,13 +123,28 @@ Categories: **Modern**, **VU**, **Clock**.
 
 Shows playback information and visualisations while music plays.
 
-#### Modern Visualisers
+### **Bars – Modern Visualiser**
 
-**Bars** – vertical spectrum bars <img align="left" width="762" height="192" alt="modernbars" src="https://github.com/user-attachments/assets/1fca2619-6378-4923-872d-239019a5001f" />
+<img width="762" height="192" alt="modernbars" src="https://github.com/user-attachments/assets/1fca2619-6378-4923-872d-239019a5001f" />
 
-**Dots** – point-based spectrum <img width="762" height="192" alt="spots" src="https://github.com/user-attachments/assets/68a474d1-ccf9-41d1-af80-4c7242697ea2" />
+Vertical spectrum bars  
 
-**Oscilloscope** – waveform trace <img width="762" height="192" alt="osci" src="https://github.com/user-attachments/assets/82e023ba-7d91-4c7c-9126-2db421f73c20" />
+---
+
+### **Dots – Modern Visualiser**
+
+<img width="762" height="192" alt="spots" src="https://github.com/user-attachments/assets/68a474d1-ccf9-41d1-af80-4c7242697ea2" />
+
+Point-based spectrum  
+
+---
+
+### **Oscilloscope – Modern Visualiser**
+
+<img width="762" height="192" alt="osci" src="https://github.com/user-attachments/assets/82e023ba-7d91-4c7c-9126-2db421f73c20" />
+
+Waveform trace  
+
 
 ---
 
