@@ -1,11 +1,9 @@
 # src/display/screens/vu_screen.py
-
 import logging
 import threading
 import os
 import math
 import time
-import subprocess
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 from managers.menus.base_manager import BaseManager
 
@@ -26,59 +24,142 @@ class VUScreen(BaseManager):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(logging.INFO)
 
-        self.display_manager = display_manager
-        self.mode_manager = mode_manager
-        self.volumio_listener = volumio_listener
+        self.display_manager   = display_manager
+        self.mode_manager      = mode_manager
+        self.volumio_listener  = volumio_listener
 
-        # Fonts (fallback to default if missing)
-        try:
-            self.font_artist = ImageFont.truetype(
-                "/home/volumio/Quadify/src/assets/fonts/OpenSans-Regular.ttf", 10
-            )
-            self.font_title = ImageFont.truetype(
-                "/home/volumio/Quadify/src/assets/fonts/OpenSans-Regular.ttf", 12
-            )
-        except Exception:
-            self.font_artist = self.font_title = ImageFont.load_default()
-        self.font = self.font_title or ImageFont.load_default()
+        # ---------- Asset roots ----------
+        self.assets_root = self._resolve_assets_root()
 
-        # Background
-        vuscreen_path = display_manager.config.get(
-            "vuscreen_path",
-            "/home/volumio/Quadify/src/assets/images/pngs/vuscreen.png",
-        )
+        # ---------- Fonts ----------
+        # Prefer display_manager.get_font(...) if available; otherwise try config, assets, then system fonts.
+        self.font_title  = self._get_font(size=12)
+        self.font_artist = self._get_font(size=10)
+        self.font        = self.font_title or ImageFont.load_default()
+
+        # ---------- Background image ----------
+        # Order: explicit config path -> assets image -> fallback
+        cfg_vu = (self.display_manager.config.get("vuscreen_path")
+                  if isinstance(getattr(self.display_manager, "config", None), dict) else None)
+        self.vuscreen_path = self._first_existing([
+            cfg_vu,
+            os.path.join(self.assets_root, "images", "pngs", "vuscreen.png"),
+            os.path.join(self.assets_root, "images", "vuscreen.png"),
+        ])
+
         try:
-            bg_orig = Image.open(vuscreen_path).convert("RGBA")
-            self.vu_bg = ImageEnhance.Brightness(bg_orig).enhance(0.6)
+            bg_orig   = Image.open(self.vuscreen_path).convert("RGBA") if self.vuscreen_path else None
+            self.vu_bg = ImageEnhance.Brightness(bg_orig).enhance(0.6) if bg_orig else None
         except Exception as e:
-            self.logger.error(f"VUScreen: Could not load background -> {e}")
-            self.vu_bg = Image.new("RGBA", self.display_manager.oled.size, "black")
+            self.logger.error(f"VUScreen: Could not load background from {self.vuscreen_path!r} -> {e}")
+            self.vu_bg = None
 
-        # Needle geometry
-        self.left_centre = (54, 68)
-        self.right_centre = (200, 68)
+        if self.vu_bg is None:
+            # Safe fallback
+            size = getattr(getattr(self.display_manager, "oled", None), "size", (256, 128))
+            self.vu_bg = Image.new("RGBA", size, "black")
+
+        # ---------- Needle geometry ----------
+        self.left_centre   = (54, 68)
+        self.right_centre  = (200, 68)
         self.needle_length = 28
-        self.min_angle = -70
-        self.max_angle = 70
+        self.min_angle     = -70
+        self.max_angle     = 70
 
-        # Spectrum (CAVA/FIFO)
-        self.spectrum_thread = None
+        # ---------- Spectrum (CAVA/FIFO) ----------
+        self.spectrum_thread  = None
         self.running_spectrum = False
-        self.spectrum_bars = [0] * 36
+        self.spectrum_bars    = [0] * 36
 
-        # State / threading
-        self.latest_state = None
-        self.current_state = None
-        self.state_lock = threading.Lock()
-        self.update_event = threading.Event()
-        self.stop_event = threading.Event()
-        self.is_active = False
-        self.update_thread = None
+        # ---------- State / threading ----------
+        self.latest_state     = None
+        self.current_state    = None
+        self.state_lock       = threading.Lock()
+        self.update_event     = threading.Event()
+        self.stop_event       = threading.Event()
+        self.is_active        = False
+        self.update_thread    = None
         self.last_update_time = time.time()
 
         # Hook Volumio
         if self.volumio_listener:
             self.volumio_listener.state_changed.connect(self.on_volumio_state_change)
+
+    # ----------------- Asset / font helpers -----------------
+
+    def _resolve_assets_root(self):
+        # Try display_manager.config.assets_root first
+        cfg = getattr(self.display_manager, "config", None)
+        if isinstance(cfg, dict):
+            root = cfg.get("assets_root")
+            if root and os.path.isdir(root):
+                return root
+        # Fallback: ../../assets relative to this file
+        return os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "assets"))
+
+    def _first_existing(self, candidates):
+        for p in candidates or []:
+            if not p:
+                continue
+            try:
+                if os.path.exists(p):
+                    return p
+            except Exception:
+                pass
+        return None
+
+    def _get_font(self, size=12, weight="Regular"):
+        """
+        Try, in order:
+          1) display_manager.get_font(size, weight)
+          2) display_manager.config (ui_font/font_path_regular/etc.)
+          3) plugin assets: <assets_root>/fonts/OpenSans-*.ttf
+          4) common system fonts
+          5) PIL default bitmap font
+        """
+        # 1) DisplayManager API
+        get_font = getattr(self.display_manager, "get_font", None)
+        if callable(get_font):
+            try:
+                f = get_font(size=size, weight=weight)
+                if f:
+                    return f
+            except Exception as e:
+                self.logger.debug(f"VUScreen: display_manager.get_font failed -> {e}")
+
+        # 2) Config-provided font path(s)
+        paths = []
+        cfg = getattr(self.display_manager, "config", None)
+        if isinstance(cfg, dict):
+            for k in ("ui_font", "font_path_regular", "font_regular", "font_path"):
+                p = cfg.get(k)
+                if p:
+                    paths.append(p)
+
+        # 3) Asset fonts
+        paths += [
+            os.path.join(self.assets_root, "fonts", f"OpenSans-{weight}.ttf"),
+            os.path.join(self.assets_root, "fonts", "OpenSans-Regular.ttf"),
+            os.path.join(self.assets_root, "fonts", "OpenSans-SemiBold.ttf"),
+            os.path.join(self.assets_root, "fonts", "OpenSans-Bold.ttf"),
+        ]
+
+        # 4) System fallbacks
+        paths += [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        ]
+
+        for p in paths:
+            if p and os.path.exists(p):
+                try:
+                    return ImageFont.truetype(p, size)
+                except Exception as e:
+                    self.logger.debug(f"VUScreen: Failed to load font {p!r} -> {e}")
+
+        self.logger.warning("VUScreen: Falling back to default bitmap font (no TTF found).")
+        return ImageFont.load_default()
 
     # ----------------- Volumio -----------------
 
@@ -213,24 +294,25 @@ class VUScreen(BaseManager):
     def draw_display(self, data):
         # Levels
         bars = self.spectrum_bars if self.mode_manager.config.get("cava_enabled", False) else [0] * 36
-        left = sum(bars[:18]) // 18 if len(bars) == 36 else 0
+        left  = sum(bars[:18]) // 18 if len(bars) == 36 else 0
         right = sum(bars[18:]) // 18 if len(bars) == 36 else 0
 
         try:
             frame = self.vu_bg.copy()
         except Exception:
-            frame = Image.new("RGBA", self.display_manager.oled.size, "black")
+            size  = getattr(getattr(self.display_manager, "oled", None), "size", (256, 128))
+            frame = Image.new("RGBA", size, "black")
 
         draw = ImageDraw.Draw(frame)
-        width, _ = self.display_manager.oled.size
+        width, _ = getattr(self.display_manager.oled, "size", (256, 128))
 
         # Needles
-        self.draw_needle(draw, self.left_centre, self.level_to_angle(left), self.needle_length, "white")
+        self.draw_needle(draw, self.left_centre,  self.level_to_angle(left),  self.needle_length, "white")
         self.draw_needle(draw, self.right_centre, self.level_to_angle(right), self.needle_length, "white")
 
         # Artist + Title
-        title = data.get("title", "Unknown Title")
-        artist = data.get("artist", "Unknown Artist")
+        title   = data.get("title", "Unknown Title")
+        artist  = data.get("artist", "Unknown Artist")
         combined = f"{artist} - {title}"
         if len(combined) > 45:
             combined = combined[:42] + "..."
@@ -239,10 +321,10 @@ class VUScreen(BaseManager):
 
         # Info line
         samplerate = data.get("samplerate", "N/A")
-        bitdepth = data.get("bitdepth", "N/A")
-        volume = data.get("volume", "N/A")
-        info_text = f"Vol: {volume} / {samplerate} / {bitdepth}"
-        info_w, _ = draw.textsize(info_text, font=self.font_artist)
+        bitdepth   = data.get("bitdepth", "N/A")
+        volume     = data.get("volume", "N/A")
+        info_text  = f"Vol: {volume} / {samplerate} / {bitdepth}"
+        info_w, _  = draw.textsize(info_text, font=self.font_artist)
         draw.text(((width - info_w) // 2, text_h), info_text, font=self.font_artist, fill="white")
 
         self.display_manager.display_pil(frame)
@@ -256,7 +338,7 @@ class VUScreen(BaseManager):
             self.latest_state = {"volume": 100}
         with self.state_lock:
             curr_vol = self.latest_state.get("volume", 100)
-            new_vol = max(0, min(int(curr_vol) + volume_change, 100))
+            new_vol  = max(0, min(int(curr_vol) + volume_change, 100))
         try:
             if volume_change > 0:
                 self.volumio_listener.socketIO.emit("volume", "+")

@@ -146,6 +146,30 @@ class ModeManager:
         self.menu_modes = {"menu"}
 
 
+    def _read_json_safe(self, path):
+        try:
+            with open(path, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _atomic_write_json(self, path, data):
+        # ensure target directory exists
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)  # atomic on same filesystem
+
+    def _bump_meta(self, raw, who="rotary"):
+        meta = (raw.get("meta") or {})
+        rev = meta.get("rev")
+        rev = rev + 1 if isinstance(rev, int) else 1
+        raw["meta"] = {"rev": rev, "last_writer": str(who)}
+        return raw
+
     # --- Callback to push the current state before a transition ---
     def push_current_state(self, event):
         if event.event.name != "back" and self.state is not None:
@@ -168,29 +192,63 @@ class ModeManager:
         return "original"
 
     def save_preferences(self):
+        """
+        Save only the keys ModeManager owns, preserving everything else in preference.json.
+        Also bumps meta.rev and stamps last_writer="rotary", and writes atomically.
+        """
         if not self.preference_file_path:
             return
-        if os.path.exists(self.preference_file_path):
-            with open(self.preference_file_path, "r") as f:
-                try:
-                    data = json.load(f)
-                except (json.JSONDecodeError, IOError):
-                    data = {}
-        else:
-            data = {}
-        for key in (
-            "display_mode", "clock_font_key", "show_seconds", "show_date",
-            "screensaver_enabled", "screensaver_type", "screensaver_timeout",
-            "oled_brightness", "cava_enabled", "modern_spectrum_mode"
-        ):
-            if key in self.config:
-                data[key] = self.config[key]
+
+        # 1) Load existing file (preserve unknowns / nested canonical sections)
+        data = self._read_json_safe(self.preference_file_path)
+
+        # 2) Update the Rotary-owned flat keys (only if present in config)
+        owned_keys = (
+            "display_mode",
+            "clock_font_key",
+            "show_seconds",
+            "show_date",
+            "screensaver_enabled",
+            "screensaver_type",
+            "screensaver_timeout",
+            "oled_brightness",
+            "cava_enabled",
+            "modern_spectrum_mode",
+            "ignore_airplay",
+        )
+        for k in owned_keys:
+            if k in self.config:
+                data[k] = self.config[k]
+
+        # 3) Optional: keep mirrors consistent if your Python screens read the flat flags
+        #    (These mirrors are harmless if Node already maintains them.)
+        if "display" in data:
+            disp = data.get("display") or {}
+            # If user changed top-level brightness here, reflect into nested
+            if "oled_brightness" in data and isinstance(data["oled_brightness"], int):
+                disp["oled_brightness"] = data["oled_brightness"]
+            # If user toggled CAVA here, mirror to nested spectrum if present
+            if "cava_enabled" in data:
+                disp["spectrum"] = bool(data["cava_enabled"])
+            data["display"] = disp
+
+        # 4) Bump metadata & stamp writer
+        data = self._bump_meta(data, who="rotary")
+
+        # 5) Atomic write
         try:
-            with open(self.preference_file_path, "w") as f:
-                json.dump(data, f, indent=2)
-            self.logger.info(f"ModeManager: Preferences saved to {self.preference_file_path}.")
+            self._atomic_write_json(self.preference_file_path, data)
+            self.logger.info(
+                "ModeManager: Preferences saved to %s (rev=%s, writer=rotary).",
+                self.preference_file_path,
+                data.get("meta", {}).get("rev"),
+            )
         except IOError as e:
-            self.logger.warning(f"ModeManager: Could not write to {self.preference_file_path}. Error: {e}")
+            self.logger.warning(
+                "ModeManager: Could not write to %s. Error: %s",
+                self.preference_file_path,
+                e,
+            )
 
     def set_display_mode(self, mode_name):
         if mode_name in ("original", "modern", "minimal", "vuscreen", "digitalvuscreen"):
