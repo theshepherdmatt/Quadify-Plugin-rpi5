@@ -6,6 +6,7 @@ import time
 import subprocess
 from transitions import Machine
 from .menus.streaming_manager import StreamingManager
+from handlers.icon_provider import IconProvider
 
 
 class ModeManager:
@@ -129,6 +130,8 @@ class ModeManager:
             send_event=True
         )
         self._define_transitions()
+
+        self.icon_provider = IconProvider()
 
         if self.volumio_listener is not None:
             self.volumio_listener.state_changed.connect(self.process_state_change)

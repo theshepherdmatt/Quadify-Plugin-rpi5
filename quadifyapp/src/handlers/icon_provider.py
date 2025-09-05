@@ -1,25 +1,27 @@
 # src/handlers/icon_provider.py
-#
-# Lightweight icon lookup that pulls from your cached PNGs and (optionally)
-# the icons manifest written by your icon_fetcher. No dependency on
-# display_manager.icons.
 
-import os
-import json
+import os, json
 from typing import Optional, Dict, List
 from PIL import Image
 
-ASSETS_PNG_DIR = "/home/volumio/Quadify/src/assets/pngs"
-ASSETS_MANIFEST = "/home/volumio/Quadify/src/assets/icons_manifest.json"
+# Resolve plugin paths relative to this file
+_HERE = os.path.dirname(__file__)
+_SRC  = os.path.abspath(os.path.join(_HERE, ".."))  # .../quadifyapp/src
 
+_DEFAULT_PNG_DIR   = os.path.join(_SRC, "assets", "pngs")
+_DEFAULT_MANIFEST  = os.path.join(_SRC, "assets", "icons_manifest.json")
 
-def _norm_label(s):  # type: (str) -> str
+def _first_existing(paths):
+    for p in paths:
+        if p and os.path.exists(p):
+            return p
+    return None
+
+def _norm_label(s):  # same as before
     s = (s or "").strip()
     return s.upper().replace(" ", "_").replace("-", "_").replace("/", "_")
 
-
-def _variants(s):  # type: (str) -> List[str]
-    """Generate a few spelling/casing variants that commonly appear."""
+def _variants(s):  # same as before
     s = (s or "").strip()
     if not s:
         return []
@@ -27,61 +29,54 @@ def _variants(s):  # type: (str) -> List[str]
     up = _norm_label(s)
     return list({lo, lo.replace("_", "-"), lo.replace("-", "_"), up})
 
+# Candidate locations (env overrides first, then plugin defaults, then common fallbacks)
+CANDIDATE_PNG_DIRS = [
+    os.environ.get("QUADIFY_ICON_DIR") or os.environ.get("QUADIFY_ASSETS_PNG_DIR"),
+    _DEFAULT_PNG_DIR,
+    "/data/plugins/system_hardware/quadify/quadifyapp/src/assets/pngs",
+    "/home/volumio/Quadify/src/assets/pngs",
+]
+CANDIDATE_PNG_DIRS = [p for p in CANDIDATE_PNG_DIRS if p]
+
+CANDIDATE_MANIFESTS = [
+    os.environ.get("QUADIFY_ICON_MANIFEST"),
+    _DEFAULT_MANIFEST,
+    "/data/plugins/system_hardware/quadify/quadifyapp/src/assets/icons_manifest.json",
+    "/home/volumio/Quadify/src/assets/icons_manifest.json",
+]
+CANDIDATE_MANIFESTS = [p for p in CANDIDATE_MANIFESTS if p]
 
 class IconProvider:
-    """
-    Loads icons from the PNG cache (and optional JSON manifest).
-    Use:
-        ip = IconProvider()
-        img = ip.get_icon("spotify", size=20)
-        img2 = ip.get_service_icon_from_state(state, size=18)
-    """
-
-    def __init__(self, assets_dir=ASSETS_PNG_DIR, manifest_path=ASSETS_MANIFEST):
-        self.assets_dir = assets_dir
-        self.manifest_path = manifest_path
-        self._cache = {}        # type: Dict[str, Image.Image]  # base images by UPPER label
-        self._index = {}        # type: Dict[str, str]           # UPPER label -> absolute path
-        self._manifest = {}     # type: Dict[str, str]           # UPPER label -> absolute path
+    def __init__(self, assets_dir: Optional[str] = None, manifest_path: Optional[str] = None):
+        # Pick first existing unless explicit args were passed
+        self.assets_dir    = assets_dir    or _first_existing(CANDIDATE_PNG_DIRS)    or _DEFAULT_PNG_DIR
+        self.manifest_path = manifest_path or _first_existing(CANDIDATE_MANIFESTS)   or _DEFAULT_MANIFEST
+        self._cache: Dict[str, Image.Image] = {}
+        self._index: Dict[str, str] = {}
+        self._manifest: Dict[str, str] = {}
         self.reload()
 
-    # ----------------------- public API -----------------------
-
     def reload(self):
-        """(Re)load directory index and manifest (does not clear decoded image cache)."""
         self._build_index()
         self._load_manifest()
 
-    def get_icon(self, key, size=None):  # type: (str, Optional[int]) -> Optional[Image.Image]
-        """
-        Return a PIL.Image (RGBA) for 'key' (e.g. 'qobuz', 'RADIO_PARADISE').
-        If size is provided, returns a resized COPY; base image stays cached.
-        """
+    def get_icon(self, key: str, size: Optional[int] = None) -> Optional[Image.Image]:
         for v in _variants(key):
             base = self._load_base(_norm_label(v))
             if base is not None:
-                if size:
-                    img = base.copy()
-                    img = img.resize((size, size), Image.LANCZOS)
-                    return img
-                return base
+                return base.resize((size, size), Image.LANCZOS) if size else base
         return None
 
-    def get_service_icon_from_state(self, state, size=None):  # type: (dict, Optional[int]) -> Optional[Image.Image]
-        """
-        Try multiple hints from a Volumio state: service, trackType, plugin, stream.
-        Includes a few normalised aliases (spop->SPOTIFY, radio_paradise->RADIO_PARADISE, etc).
-        """
+    def get_service_icon_from_state(self, state: dict, size: Optional[int] = None) -> Optional[Image.Image]:
         service    = (state.get("service") or "").strip()
         track_type = (state.get("trackType") or "").strip()
         plugin     = (state.get("plugin") or "").strip()
         stream     = (state.get("stream") or "").strip()
 
-        candidates = []  # type: List[str]
+        candidates: List[str] = []
         for v in (service, track_type, plugin, stream):
             candidates.extend(_variants(v))
 
-        # Common aliases
         alias_map = {
             "spop": "SPOTIFY",
             "radio_paradise": "RADIO_PARADISE",
@@ -99,49 +94,43 @@ class IconProvider:
                 return img
         return None
 
-    # ----------------------- internals ------------------------
-
+    # --- internals (unchanged except using self.assets_dir / self.manifest_path) ---
     def _build_index(self):
         self._index.clear()
         if not os.path.isdir(self.assets_dir):
             return
         for name in os.listdir(self.assets_dir):
-            if not name.lower().endswith(".png"):
-                continue
-            label = _norm_label(os.path.splitext(name)[0])
-            self._index[label] = os.path.join(self.assets_dir, name)
+            if name.lower().endswith(".png"):
+                label = _norm_label(os.path.splitext(name)[0])
+                self._index[label] = os.path.join(self.assets_dir, name)
 
     def _load_manifest(self):
         self._manifest.clear()
+        if not self.manifest_path or not os.path.exists(self.manifest_path):
+            return
         try:
-            if os.path.exists(self.manifest_path):
-                with open(self.manifest_path, "r") as f:
-                    data = json.load(f)
-
-                # support both list-of-entries and {label:path} formats
-                if isinstance(data, list):
-                    for entry in data:
-                        label = _norm_label(entry.get("label", ""))
-                        path = entry.get("path")
-                        if label and path:
-                            self._manifest[label] = path
-                elif isinstance(data, dict):
-                    for k, v in data.items():
-                        self._manifest[_norm_label(k)] = v
+            with open(self.manifest_path, "r") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                for entry in data:
+                    label = _norm_label(entry.get("label", ""))
+                    path = entry.get("path")
+                    if label and path:
+                        self._manifest[label] = path
+            elif isinstance(data, dict):
+                for k, v in data.items():
+                    self._manifest[_norm_label(k)] = v
         except Exception:
-            # Manifest is optional; ignore errors.
             pass
 
-    def _load_base(self, label_upper):  # type: (str) -> Optional[Image.Image]
+    def _load_base(self, label_upper: str) -> Optional[Image.Image]:
         if not label_upper:
             return None
         if label_upper in self._cache:
             return self._cache[label_upper]
-
         path = self._manifest.get(label_upper) or self._index.get(label_upper)
         if not path or not os.path.exists(path):
             return None
-
         try:
             img = Image.open(path).convert("RGBA")
             self._cache[label_upper] = img

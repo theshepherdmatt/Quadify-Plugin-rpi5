@@ -8,7 +8,7 @@ from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
-from managers.menus.base_manager import BaseManager
+from managers.base_manager import BaseManager
 
 # IconProvider is optional: prefer a provided instance on the mode_manager,
 # otherwise try to construct one. If import fails, we'll fall back gracefully.
@@ -42,13 +42,13 @@ class ModernScreen(BaseManager):
 
         # Prefer IconProvider over display_manager icons
         self.icon_provider = None
-        if getattr(mode_manager, "icon_provider", None):
-            self.icon_provider = mode_manager.icon_provider
-        elif IconProvider:
-            try:
-                self.icon_provider = IconProvider()
-            except Exception:  # noqa: BLE001
-                self.icon_provider = None
+        try:
+            self.icon_provider = IconProvider()
+            self.logger.info("ModeManager: IconProvider dir=%s manifest=%s",
+                            getattr(self.icon_provider, "assets_dir", None),
+                            getattr(self.icon_provider, "manifest_path", None))
+        except Exception as e:
+            self.logger.warning("ModeManager: IconProvider not available: %s", e)
 
         # Spectrum / CAVA
         self.running_spectrum = False
@@ -344,7 +344,7 @@ class ModernScreen(BaseManager):
         spectrum_enabled = self.running_spectrum and self.mode_manager.config.get("cava_enabled", False)
 
         # Service resolution and memory of previous
-        service = (data.get("service") or "default").lower()
+        service = (data.get("service") or "").lower()
         track_type = (data.get("trackType") or "").lower()
         status = (data.get("status") or "").lower()
 
@@ -443,13 +443,12 @@ class ModernScreen(BaseManager):
         # 6) Service icon near duration (slightly above, right-aligned to text end)
         icon_size = 22
         service_icon = None
+        # first try state-aware
         if self.icon_provider and hasattr(self.icon_provider, "get_service_icon_from_state"):
-            try:
-                service_icon = self.icon_provider.get_service_icon_from_state(data, size=icon_size)
-            except Exception:  # noqa: BLE001
-                service_icon = None
-        if service_icon is None:
-            service_icon = self._get_service_icon(service, size=icon_size)
+            service_icon = self.icon_provider.get_service_icon_from_state(data, size=icon_size)
+        # then try direct mapping (mpd -> MUSIC_LIBRARY, etc.)
+        if not service_icon and self.icon_provider:
+            service_icon = self.icon_provider.get_icon(self._service_key_for_provider(service), size=icon_size)
 
         if service_icon:
             if service_icon.mode == "RGBA":

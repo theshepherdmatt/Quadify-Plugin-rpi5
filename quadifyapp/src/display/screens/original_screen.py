@@ -6,7 +6,7 @@ import threading
 import time
 
 from PIL import Image, ImageDraw, ImageFont, ImageSequence
-from managers.menus.base_manager import BaseManager  # Or whichever base class your project uses
+from managers.base_manager import BaseManager  # Or whichever base class your project uses
 
 class OriginalScreen(BaseManager):
     """
@@ -22,6 +22,8 @@ class OriginalScreen(BaseManager):
 
         self.mode_manager = mode_manager
         self.volumio_listener = volumio_listener
+
+        self.current_state = None
 
         self.previous_service = None
 
@@ -41,6 +43,18 @@ class OriginalScreen(BaseManager):
         if self.volumio_listener:
             self.volumio_listener.state_changed.connect(self.on_volumio_state_change)
         self.logger.info("OriginalScreen initialized.")
+
+        # Use the shared IconProvider from BaseManager / ModeManager
+        if self.icon_provider:
+            self.logger.info(
+                "OriginalScreen: IconProvider ready (dir=%s manifest=%s)",
+                getattr(self.icon_provider, "assets_dir", None),
+                getattr(self.icon_provider, "manifest_path", None),
+            )
+        else:
+            self.logger.warning(
+                "OriginalScreen: IconProvider not available; will use display_manager icons as fallback."
+            )
 
     # ------------------------------------------------------------------
     #   Volumio State Change Handler
@@ -149,6 +163,12 @@ class OriginalScreen(BaseManager):
             self.draw_display(current_state)
         else:
             self.logger.warning("OriginalScreen: No current Volumio state to display.")
+
+        # Ensure update thread alive (allows stop/start cycling)
+        if not self.update_thread.is_alive():
+            self.stop_event.clear()
+            self.update_thread = threading.Thread(target=self.update_display_loop, daemon=True)
+            self.update_thread.start()
 
 
     def stop_mode(self):
@@ -293,39 +313,49 @@ class OriginalScreen(BaseManager):
         draw.text((x_position, y_position), bitdepth, font=font_info, fill="white", anchor="rm")
         self.logger.debug(f"OriginalScreen: Drew bit depth => {bitdepth}")
 
-        # Draw service icon if we have one
-        icon = self.display_manager.icons.get(service)
-        if icon:
+        # Draw service icon (prefer IconProvider; fallback to display_manager)
+        service_icon = None
+        try:
+            service_icon = self._get_service_icon(data, size=38)  # uses IconProvider if available
+        except Exception as e:
+            self.logger.debug("OriginalScreen: _get_service_icon failed: %s", e)
+
+
+        if service_icon:
             # Flatten alpha if needed
-            if icon.mode == "RGBA":
-                bg = Image.new("RGB", icon.size, (0, 0, 0))
-                bg.paste(icon, mask=icon.split()[3])
-                icon = bg
-            icon_padding_right = 12
-            icon_padding_top   = 6
-            icon_x = self.display_manager.oled.width - icon.width - icon_padding_right
-            icon_y = icon_padding_top
-            base_image.paste(icon, (icon_x, icon_y))
-            self.logger.debug(f"OriginalScreen: Pasted service icon '{service}' at ({icon_x}, {icon_y}).")
+            if service_icon.mode == "RGBA":
+                bg = Image.new("RGB", service_icon.size, (0, 0, 0))
+                bg.paste(service_icon, mask=service_icon.split()[3])
+                service_icon = bg
+
+            # Align right to the same x as bit depth, and sit just above it
+            # x_position is already: self.display_manager.oled.width - padding
+            try:
+                # Pillow >=8: get precise text box (no anchor on bbox, so compute top via height)
+                bw, bh = draw.textsize(bitdepth, font=font_info)
+            except Exception:
+                bw, bh = draw.textsize(bitdepth, font=font_info)
+
+            ICON_X_NUDGE = 5  # tweak this (2–6) to taste
+
+            bit_top = y_position - (bh // 2)  # anchor="rm" => y is vertical middle
+            screen_w = self.display_manager.oled.width
+
+            icon_x = min(
+                screen_w - service_icon.width,                  # don't run off the right edge
+                x_position - service_icon.width + ICON_X_NUDGE  # nudge right
+            )
+            icon_y = max(0, bit_top - service_icon.height - 4)  # 4px gap above bit depth
+
+
+            base_image.paste(service_icon, (icon_x, icon_y))
+            self.logger.debug(
+                "OriginalScreen: Pasted service icon '%s' at (%d, %d).",
+                service, icon_x, icon_y
+            )
         else:
-            # Fallback to default icon if available
-            # Draw service icon if we have one
-            icon = self.display_manager.icons.get(service)
-            if icon:
-                # Flatten alpha if needed
-                if icon.mode == "RGBA":
-                    bg = Image.new("RGB", icon.size, (0, 0, 0))
-                    bg.paste(icon, mask=icon.split()[3])
-                    icon = bg
-                icon_padding_right = 12
-                icon_padding_top   = 6
-                icon_x = self.display_manager.oled.width - icon.width - icon_padding_right
-                icon_y = icon_padding_top
-                base_image.paste(icon, (icon_x, icon_y))
-                self.logger.debug(f"OriginalScreen: Pasted service icon '{service}' at ({icon_x}, {icon_y}).")
-            else:
-                # No icon available, skip quietly (no default icon)
-                self.logger.debug("OriginalScreen: No service icon available; skipping icon draw.")
+            self.logger.debug("OriginalScreen: No service icon available; skipping icon draw.")
+
 
     # ------------------------------------------------------------------
     #   Volume Control / Toggling
@@ -350,12 +380,13 @@ class OriginalScreen(BaseManager):
         self.logger.info(f"OriginalScreen: Adjust volume from {current_vol} to {new_vol}.")
         try:
             # Volumio can accept direct integer or +/- for volume
-            if volume_change > 5:
+            if volume_change > 0:
                 self.volumio_listener.socketIO.emit("volume", "+")
-            elif volume_change < 5:
+            elif volume_change < 0:
                 self.volumio_listener.socketIO.emit("volume", "-")
             else:
                 self.volumio_listener.socketIO.emit("volume", new_vol)
+
         except Exception as e:
             self.logger.error(f"OriginalScreen: Volume emit failed => {e}")
 
@@ -401,3 +432,52 @@ class OriginalScreen(BaseManager):
             self.logger.info(f"Displayed error => {title}: {message}")
             time.sleep(2)
             # Optionally redraw the normal display or just leave it cleared.
+
+    def _service_key_for_provider(self, service: str) -> str:
+        s = (service or "").lower()
+        mapping = {
+            "radio_paradise": "RADIO_PARADISE",
+            "radioparadise": "RADIO_PARADISE",
+            "mother_earth_radio": "MOTHER_EARTH_RADIO",
+            "motherearthradio": "MOTHER_EARTH_RADIO",
+            "webradio": "WEB_RADIO",
+            "spop": "SPOTIFY",
+            "spotify": "SPOTIFY",
+            "qobuz": "QOBUZ",
+            "tidal": "TIDAL",
+            "mpd": "MUSIC_LIBRARY",
+        }
+        return mapping.get(s, s.upper())
+
+    def _get_service_icon(self, state_or_service, size: int = 22):
+        """
+        Prefer IconProvider (state-aware), then provider by key,
+        then display_manager icons as a last resort.
+        """
+        icon = None
+        if isinstance(state_or_service, dict):
+            service = (state_or_service.get("service") or "").lower()
+            if self.icon_provider and hasattr(self.icon_provider, "get_service_icon_from_state"):
+                try:
+                    icon = self.icon_provider.get_service_icon_from_state(state_or_service, size=size)
+                except Exception as e:
+                    self.logger.debug("IconProvider.get_service_icon_from_state failed: %s", e)
+        else:
+            service = (state_or_service or "").lower()
+
+        if icon is None and self.icon_provider and hasattr(self.icon_provider, "get_icon"):
+            key = self._service_key_for_provider(service)
+            try:
+                icon = self.icon_provider.get_icon(key, size=size) or self.icon_provider.get_icon(service, size=size)
+            except Exception as e:
+                self.logger.debug("IconProvider.get_icon failed: %s", e)
+
+        if icon is None and hasattr(self.display_manager, "icons"):
+            key = self._service_key_for_provider(service)
+            dm_icon = (self.display_manager.icons.get(key)
+                    or self.display_manager.icons.get(service)
+                    or self.display_manager.icons.get(service.upper()))
+            if dm_icon:
+                icon = dm_icon.resize((size, size), Image.LANCZOS).convert("RGB")
+
+        return icon

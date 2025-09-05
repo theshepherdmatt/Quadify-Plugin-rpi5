@@ -24,7 +24,7 @@
     "gpio_bcm": 27
   },
   "safety": {
-    "safe_shutdown": true,
+    "safe_shutdown": true
   },
   "modern_spectrum_mode": "bars"
 }
