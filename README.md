@@ -90,14 +90,18 @@ Display Screens
 
 Quadify provides a series of screens to guide you from startup through playback.
 
+
+<img width="768" height="192" alt="logo" src="https://github.com/user-attachments/assets/6f021e9c-35b4-46e1-8510-e662c7d64633" />
+
 1. Loading Screen
 
 Shown while the Quadify service initialises.
 
 Confirms the plugin and OLED display are starting correctly.
 
-<img width="768" height="192" alt="logo" src="https://github.com/user-attachments/assets/6f021e9c-35b4-46e1-8510-e662c7d64633" />
 
+
+<img width="768" height="192" alt="ready" src="https://github.com/user-attachments/assets/a3460598-44a5-43d4-9f4c-16e4a11b80e9" />
 
 2. Ready Screen
 
@@ -105,8 +109,9 @@ Indicates that Quadify is active but idle (no music yet).
 
 Press any button, turn the encoder, or use your remote to exit to the menu.
 
-<img width="768" height="192" alt="ready" src="https://github.com/user-attachments/assets/a3460598-44a5-43d4-9f4c-16e4a11b80e9" />
 
+
+<img width="762" height="192" alt="menu" src="https://github.com/user-attachments/assets/cc0f896c-f56a-4514-abad-a1c22c4e99a9" />
 
 3. Menu Screen
 
@@ -114,14 +119,30 @@ Entry point for choosing a display mode.
 
 Categories: Modern, VU, Clock.
 
-<img width="762" height="192" alt="menu" src="https://github.com/user-attachments/assets/cc0f896c-f56a-4514-abad-a1c22c4e99a9" />
-
 
 
 <img width="762" height="192" alt="modernbars" src="https://github.com/user-attachments/assets/1fca2619-6378-4923-872d-239019a5001f" />
 
+4. Playing Screens
+
+Shows playback information and visualisations while music plays.
+
+Modern Visualisers
+
+Bars – vertical spectrum bars
+
+
+
 <img width="762" height="192" alt="osci" src="https://github.com/user-attachments/assets/82e023ba-7d91-4c7c-9126-2db421f73c20" />
+Dots – point-based spectrum
+
 
 <img width="762" height="192" alt="spots" src="https://github.com/user-attachments/assets/68a474d1-ccf9-41d1-af80-4c7242697ea2" />
+Oscilloscope – waveform trace
 
 <img width="762" height="192" alt="osci" src="https://github.com/user-attachments/assets/96266694-0607-4041-936d-36141edcb453" />
+VU Meters
+
+Classic – retro dual-needle meter
+
+Digital – digital peak meter (coming soon)
