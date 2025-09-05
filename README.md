@@ -85,9 +85,6 @@ If Quadify Plugin isn’t working as expected:
 
 If issues persist, please [open an Issue](https://github.com/theshepherdmatt/Quadify-Plugin/issues) with your setup details and error messages.
 
-Perfect — you’ve got all the content, it just needs **clean hierarchy and consistent formatting** so each screen looks like a mini section with **header → image → description**. Here’s a polished rewrite of your “Display Screens” section in that format:
-
----
 
 ## Display Screens
 
@@ -134,14 +131,18 @@ Shows playback information and visualisations while music plays.
 
 **Oscilloscope** – waveform trace <img width="762" height="192" alt="osci" src="https://github.com/user-attachments/assets/82e023ba-7d91-4c7c-9126-2db421f73c20" />
 
+---
+
 #### VU Meters
 
 **Classic** – retro dual-needle meter
 **Digital** – digital peak meter *(coming soon)* <img width="762" height="192" alt="osci" src="https://github.com/user-attachments/assets/96266694-0607-4041-936d-36141edcb453" />
 
+---
+
 #### Clock
 
 **Clock** – simple digital time display (text-based).
 
----
+
 
