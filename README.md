@@ -125,7 +125,7 @@ Shows playback information and visualisations while music plays.
 
 #### Modern Visualisers
 
-**Bars** – vertical spectrum bars <img width="762" height="192" alt="modernbars" src="https://github.com/user-attachments/assets/1fca2619-6378-4923-872d-239019a5001f" />
+**Bars** – vertical spectrum bars <img align="left" width="762" height="192" alt="modernbars" src="https://github.com/user-attachments/assets/1fca2619-6378-4923-872d-239019a5001f" />
 
 **Dots** – point-based spectrum <img width="762" height="192" alt="spots" src="https://github.com/user-attachments/assets/68a474d1-ccf9-41d1-af80-4c7242697ea2" />
 
