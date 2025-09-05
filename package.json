@@ -1,6 +1,6 @@
 {
   "name": "quadify",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Python-powered Volumio plugin: Quadify integration",
   "main": "index.js",
   "scripts": {
@@ -15,15 +15,11 @@
     "plugin_type": "system_hardware",
     "architectures": [
       "armhf",
-      "armv7l",
-      "arm64",
-      "x86",
+      "amd64",
       "i386"
     ],
     "os": [
-      "buster",
-      "bullseye",
-      "bookworm"
+      "buster"
     ],
     "details": "Integration for Quadify via Python backend.",
     "changelog": "Initial release with Python integration."

@@ -4,7 +4,7 @@
   "prettyName": "Quadify Plugin",
   "description": "Integrates the Quadify Python interface with Volumio.",
   "author": "Matt Shepherd",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "category": "system_hardware",
   "plugin_type": "system_hardware",
   "icon": "fa-cogs",
@@ -12,6 +12,6 @@
   "volumio_version": ">=3.0.0",
   "node": ">=14",
   "os": ["buster", "bullseye", "bookworm"],
-  "architecture": ["armhf", "armv7l", "arm64", "x86", "i386"],
+  "architecture": ["armhf","amd64","i386"],
   "uninstall_script": "uninstall.js"
 }
