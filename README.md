@@ -85,5 +85,5 @@ If Quadify Plugin isn’t working as expected:
 
 If issues persist, please [open an Issue](https://github.com/theshepherdmatt/Quadify-Plugin/issues) with your setup details and error messages.
 
----<img width="254" height="64" alt="Modern" src="https://github.com/user-attachments/assets/9e3acbfe-fb75-47ac-8849-48b75494594f" />
+---<img width="354" height="164" alt="Modern" src="https://github.com/user-attachments/assets/9e3acbfe-fb75-47ac-8849-48b75494594f" />
 
