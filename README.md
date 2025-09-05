@@ -85,9 +85,38 @@ If Quadify Plugin isn’t working as expected:
 
 If issues persist, please [open an Issue](https://github.com/theshepherdmatt/Quadify-Plugin/issues) with your setup details and error messages.
 
+
+Display Screens
+
+Quadify provides a series of screens to guide you from startup through playback.
+
+1. Loading Screen
+
+Shown while the Quadify service initialises.
+
+Confirms the plugin and OLED display are starting correctly.
+
+<img width="768" height="192" alt="logo" src="https://github.com/user-attachments/assets/6f021e9c-35b4-46e1-8510-e662c7d64633" />
+
+
+2. Ready Screen
+
+Indicates that Quadify is active but idle (no music yet).
+
+Press any button, turn the encoder, or use your remote to exit to the menu.
+
 <img width="768" height="192" alt="ready" src="https://github.com/user-attachments/assets/a3460598-44a5-43d4-9f4c-16e4a11b80e9" />
 
+
+3. Menu Screen
+
+Entry point for choosing a display mode.
+
+Categories: Modern, VU, Clock.
+
 <img width="762" height="192" alt="menu" src="https://github.com/user-attachments/assets/cc0f896c-f56a-4514-abad-a1c22c4e99a9" />
+
+
 
 <img width="762" height="192" alt="modernbars" src="https://github.com/user-attachments/assets/1fca2619-6378-4923-872d-239019a5001f" />
 
