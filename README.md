@@ -150,7 +150,12 @@ Waveform trace
 
 #### VU Meters
 
-**Classic** – retro dual-needle meter
+**Classic** 
+
+<img width="762" height="192" alt="classicvu" src="https://github.com/user-attachments/assets/0c723adc-27b5-4526-980a-db0db47357e2" />
+
+retro dual-needle meter
+
 **Digital** – digital peak meter *(coming soon)* <img width="762" height="192" alt="osci" src="https://github.com/user-attachments/assets/96266694-0607-4041-936d-36141edcb453" />
 
 ---
