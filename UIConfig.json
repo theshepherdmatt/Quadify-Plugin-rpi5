@@ -44,6 +44,7 @@
 
     {
       "id": "buttons_leds",
+      "label": "GPIO Expander",
       "element": "section",
       "icon": "fa-lightbulb-o",
       "onSave": { "type": "controller", "endpoint": "system_hardware/quadify", "method": "saveButtons_leds" },
@@ -88,7 +89,7 @@
 
     {
       "id": "safety_controls",
-      "label": "Safety",
+      "label": "Clean On/Off",
       "element": "section",
       "icon": "fa-shield",
       "onSave": { "type": "controller", "endpoint": "system_hardware/quadify", "method": "saveSafety_controls" },
