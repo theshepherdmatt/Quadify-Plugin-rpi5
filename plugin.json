@@ -9,9 +9,14 @@
   "plugin_type": "system_hardware",
   "icon": "fa-cogs",
   "isManuallyInstalled": true,
-  "volumio_version": ">=3.0.0",
-  "node": ">=14",
-  "os": ["buster", "bullseye", "bookworm"],
-  "architecture": ["armhf","amd64","i386"],
+
+  "volumio_version": ">=3.569",
+
+  "node": ">=16",
+
+  "os": ["bookworm", "bullseye"],
+
+  "architecture": ["armhf"],
+
   "uninstall_script": "uninstall.js"
 }
