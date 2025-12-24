@@ -30,7 +30,8 @@ ssh volumio@volumio.local
 **Step 2.** Clone (download) this repository:
 
 ```bash
-git clone https://github.com/theshepherdmatt/Quadify-Plugin.git
+git clone https://github.com/theshepherdmatt/Quadify-Plugin-rpi5.git
+mv Quadify-Plugin-rpi5 Quadify-Plugin
 cd Quadify-Plugin
 ```
 
